@@ -1,5 +1,6 @@
 import './styles.css';
-import { getConfig, saveConfig } from './config';
+import { syncNow } from './app';
+import { getConfig, normalizeConfig, saveConfig } from './config';
 import { testConnection } from './es';
 import type { ConnectionConfig } from './types';
 
@@ -15,7 +16,7 @@ function showStatus(message: string, error = false): void {
 }
 
 function readConfig(): ConnectionConfig {
-  return { esUrl: esUrl.value.trim().replace(/\/$/, ''), apiKey: apiKey.value.trim(), indexPrefix: indexPrefix.value.trim() };
+  return normalizeConfig({ esUrl: esUrl.value, apiKey: apiKey.value, indexPrefix: indexPrefix.value });
 }
 
 void getConfig().then((config) => {
@@ -32,8 +33,10 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const config = readConfig();
-    await saveConfig(config);
+    showStatus('正在验证并切换 ES 连接…');
     await testConnection(config);
+    await syncNow(config);
+    await saveConfig(config);
     showStatus('配置已保存，连接测试成功');
     setTimeout(async () => {
       const tab = await chrome.tabs.getCurrent();

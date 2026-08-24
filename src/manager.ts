@@ -1,6 +1,6 @@
 import './styles.css';
 import { createFolder, deleteSubtree, loadNodes, moveNode, requireConfig, syncNow, updateNode } from './app';
-import { getConfig } from './config';
+import { CONFIG_KEY, getConfig } from './config';
 import { getNodes } from './db';
 import { saveLocalNode } from './sync';
 import type { BackupFile, BookmarkNode } from './types';
@@ -151,6 +151,13 @@ document.querySelector<HTMLButtonElement>('#import')!.addEventListener('click', 
 importFile.addEventListener('change', () => { const file = importFile.files?.[0]; if (file) void importBackup(file).catch((error) => showStatus(error instanceof Error ? error.message : '导入失败', true)); });
 
 void getConfig().then(refresh);
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !changes[CONFIG_KEY]) return;
+  inlineEditFolderId = null;
+  showStatus('ES 连接已切换，正在加载新数据…');
+  void refresh();
+});
 
 if (new URLSearchParams(location.search).get('sync') === '1') {
   void requireConfig().then(syncNow).then(refresh).catch((error) => showStatus(error instanceof Error ? error.message : '同步失败', true));

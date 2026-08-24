@@ -1,5 +1,9 @@
-import { getConfig, isConfigComplete } from './config';
-import { scheduleSync } from './sync';
+import { CONFIG_KEY, getConfig, isConfigComplete } from './config';
+import { cancelScheduledSyncs, scheduleSync } from './sync';
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes[CONFIG_KEY]) cancelScheduledSyncs();
+});
 
 chrome.runtime.onMessage.addListener((message: unknown) => {
   if (!message || typeof message !== 'object' || !('type' in message) || message.type !== 'schedule-sync') return;

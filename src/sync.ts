@@ -1,6 +1,6 @@
 import { bulkDelete, bulkUpsert, ensureIndex, fetchAllNodes } from './es';
 import { getMeta, getNodes, getOperations, putMeta, putNode, putOperation, removeOperations, putNodes } from './db';
-import { nodeIdentity, sanitizeNodes } from './nodes';
+import { sanitizeNodes } from './nodes';
 import type { BookmarkNode, ConnectionConfig, SyncOperation } from './types';
 import { getProfileKey, now } from './types';
 
@@ -14,11 +14,10 @@ function chooseNewer(left: BookmarkNode, right: BookmarkNode): BookmarkNode {
 
 function mergeNodes(localNodes: BookmarkNode[], remoteNodes: BookmarkNode[]): BookmarkNode[] {
   const merged = new Map<string, BookmarkNode>();
-  for (const node of localNodes) merged.set(nodeIdentity(node), node);
+  for (const node of localNodes) merged.set(node.id, node);
   for (const node of remoteNodes) {
-    const key = nodeIdentity(node);
-    const current = merged.get(key);
-    merged.set(key, current ? chooseNewer(current, node) : node);
+    const current = merged.get(node.id);
+    merged.set(node.id, current ? chooseNewer(current, node) : node);
   }
   return [...merged.values()];
 }
@@ -70,6 +69,12 @@ export function scheduleSync(config: ConnectionConfig): void {
 
 export function requestSync(config: ConnectionConfig): void {
   void chrome.runtime.sendMessage({ type: 'schedule-sync' }).catch(() => scheduleSync(config));
+}
+
+export function cancelScheduledSyncs(): void {
+  for (const timer of syncTimers.values()) clearTimeout(timer);
+  syncTimers.clear();
+  pendingProfiles.clear();
 }
 
 export async function syncProfile(config: ConnectionConfig): Promise<void> {

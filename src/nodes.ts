@@ -10,28 +10,28 @@ export function isSupportedBookmarkUrl(value: string): boolean {
   }
 }
 
-export function nodeIdentity(node: BookmarkNode): string {
-  if (node.nodeType === 'bookmark') {
-    const url = normalizeUrl(node.urlKey ?? node.url ?? '');
-    return url ? `bookmark:${url}` : `bookmark-id:${node.id}`;
-  }
-  return `folder:${node.id}`;
-}
-
 export function sanitizeNodes(nodes: BookmarkNode[]): BookmarkNode[] {
-  const newest = new Map<string, BookmarkNode>();
+  const newestById = new Map<string, BookmarkNode>();
   for (const node of nodes) {
-    const key = nodeIdentity(node);
-    const current = newest.get(key);
-    if (!current || node.updatedAt >= current.updatedAt) newest.set(key, node);
+    const current = newestById.get(node.id);
+    if (!current || node.updatedAt >= current.updatedAt) newestById.set(node.id, node);
   }
 
-  const candidates = [...newest.values()]
+  const normalized = [...newestById.values()]
     .filter((node) => !node.deletedAt)
     .filter((node) => node.nodeType === 'folder' || isSupportedBookmarkUrl(node.url ?? ''))
     .map((node) => node.nodeType === 'bookmark'
       ? { ...node, url: normalizeUrl(node.url ?? ''), urlKey: normalizeUrl(node.url ?? '') }
       : node);
+  const folders = normalized.filter((node) => node.nodeType === 'folder');
+  const bookmarksByUrl = new Map<string, BookmarkNode>();
+  for (const node of normalized) {
+    if (node.nodeType !== 'bookmark') continue;
+    const url = node.urlKey ?? node.url ?? '';
+    const current = bookmarksByUrl.get(url);
+    if (!current || node.updatedAt >= current.updatedAt) bookmarksByUrl.set(url, node);
+  }
+  const candidates = [...folders, ...bookmarksByUrl.values()];
   const byId = new Map(candidates.map((node) => [node.id, node]));
   const folderState = new Map<string, 'visiting' | 'valid' | 'invalid'>();
 

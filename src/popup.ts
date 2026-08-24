@@ -1,6 +1,6 @@
 import './styles.css';
-import { createBookmark, createFolder, deleteSubtree, DuplicateBookmarkError, loadNodes, moveNode, requireConfig, updateNode } from './app';
-import { getConfig, isConfigComplete, saveConfig } from './config';
+import { createBookmark, createFolder, deleteSubtree, DuplicateBookmarkError, loadNodes, moveNode, requireConfig, syncNow, updateNode } from './app';
+import { CONFIG_KEY, getConfig, isConfigComplete, normalizeConfig, saveConfig } from './config';
 import { testConnection } from './es';
 import { renderTree } from './tree';
 import { showBookmarkDialog, showConfirmDialog, showTextDialog } from './ui';
@@ -27,11 +27,7 @@ function showStatus(message: string, error = false): void {
 }
 
 function readInlineConfig() {
-  return {
-    esUrl: inlineEsUrl.value.trim().replace(/\/$/, ''),
-    apiKey: inlineApiKey.value.trim(),
-    indexPrefix: inlineIndexPrefix.value.trim()
-  };
+  return normalizeConfig({ esUrl: inlineEsUrl.value, apiKey: inlineApiKey.value, indexPrefix: inlineIndexPrefix.value });
 }
 
 function setConfiguredView(configured: boolean, config: ConnectionConfig | null = null): void {
@@ -215,8 +211,10 @@ inlineConfigForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const config = readInlineConfig();
-    await saveConfig(config);
+    showStatus('正在验证并切换 ES 连接…');
     await testConnection(config);
+    await syncNow(config);
+    await saveConfig(config);
     setConfiguredView(true);
     showStatus('配置已保存，连接测试成功');
     await refresh();
@@ -232,3 +230,10 @@ void getConfig().then((config) => {
   setConfiguredView(true);
   return refresh();
 }).catch((error) => showStatus(error instanceof Error ? error.message : '加载失败', true));
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !changes[CONFIG_KEY]) return;
+  selectedFolderId = null;
+  inlineEditFolderId = null;
+  void refresh();
+});
