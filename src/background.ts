@@ -41,7 +41,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
   if (info.menuItemId !== 'bookmark-page' && info.menuItemId !== 'bookmark-link') return;
   const url = info.menuItemId === 'bookmark-link' ? info.linkUrl : tab?.url;
-  if (!url || url.startsWith('chrome://')) return;
+  if (!url || !/^https?:\/\//i.test(url)) return;
   const title = info.menuItemId === 'bookmark-link' ? info.linkUrl : (tab?.title ?? url);
   const params = new URLSearchParams({ url, title: title ?? url });
   if (tab?.favIconUrl) params.set('iconUrl', tab.favIconUrl);

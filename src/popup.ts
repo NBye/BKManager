@@ -135,6 +135,7 @@ function renderCurrentTree(): void {
 async function refresh(): Promise<void> {
   try {
     currentNodes = await loadNodes(await requireConfig());
+    if (selectedFolderId && !currentNodes.some((node) => node.id === selectedFolderId && node.nodeType === 'folder')) selectedFolderId = null;
     renderCurrentTree();
     showStatus(`已加载 ${currentNodes.filter((node) => node.nodeType === 'bookmark').length} 条收藏`);
   } catch (error) {
@@ -146,7 +147,7 @@ async function refresh(): Promise<void> {
 async function addBookmark(): Promise<void> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab.url || tab.url.startsWith('chrome://')) throw new Error('当前页面不支持读取，请使用网页右键菜单收藏。');
+    if (!tab.url || !/^https?:\/\//i.test(tab.url)) throw new Error('当前页面不是 HTTP 或 HTTPS 网页，不能收藏。');
     const config = await requireConfig();
     const result = await showBookmarkDialog(currentNodes, { url: tab.url, title: tab.title ?? tab.url, iconUrl: tab.favIconUrl, folderId: selectedFolderId });
     if (!result) return;

@@ -74,6 +74,17 @@ interface SearchResponse {
   };
 }
 
+interface BulkResponse {
+  errors?: boolean;
+  items?: Array<Record<string, { error?: { reason?: string } }>>;
+}
+
+function assertBulkSucceeded(result: BulkResponse): void {
+  if (!result.errors) return;
+  const failure = result.items?.flatMap((item) => Object.values(item)).find((item) => item.error)?.error;
+  throw new Error(`ES 批量操作失败：${failure?.reason ?? '部分文档写入失败'}`);
+}
+
 export async function fetchAllNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
   const nodes: BookmarkNode[] = [];
   let searchAfter: unknown[] | undefined;
@@ -106,11 +117,24 @@ export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]
     lines.push(JSON.stringify({ index: { _index: getIndexName(config), _id: node.id } }));
     lines.push(JSON.stringify(node));
   }
-  await request(config, `${config.esUrl.replace(/\/$/, '')}/_bulk`, {
+  const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk?refresh=wait_for`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
   });
+  assertBulkSucceeded(result);
+}
+
+export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const lines: string[] = [];
+  for (const id of ids) lines.push(JSON.stringify({ delete: { _index: getIndexName(config), _id: id } }));
+  const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk?refresh=wait_for`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-ndjson' },
+    body: `${lines.join('\n')}\n`
+  });
+  assertBulkSucceeded(result);
 }
 
 export async function testConnection(config: ConnectionConfig): Promise<void> {

@@ -1,5 +1,6 @@
 import { getConfig, isConfigComplete } from './config';
 import { getNodes } from './db';
+import { isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
 import { initializeProfile, saveLocalNode, syncProfile } from './sync';
 import type { BookmarkNode, ConnectionConfig, NodeType } from './types';
 import { getProfileKey, makeId, normalizeUrl, now } from './types';
@@ -22,7 +23,7 @@ export async function requireConfig(): Promise<ConnectionConfig> {
 export async function loadNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
   await initializeProfile(config);
   const nodes = await getNodes(getProfileKey(config));
-  return nodes.filter((node) => !node.deletedAt).map((node) => ({ ...node, createdAt: node.createdAt ?? node.updatedAt })).sort((left, right) => left.sortOrder - right.sortOrder);
+  return sanitizeNodes(nodes);
 }
 
 export async function persistNode(config: ConnectionConfig, node: BookmarkNode, action: 'create' | 'update' | 'delete'): Promise<void> {
@@ -57,6 +58,7 @@ export async function createFolder(config: ConnectionConfig, parentId: string | 
 export async function createBookmark(config: ConnectionConfig, parentId: string | null, url: string, title: string, iconUrl?: string): Promise<BookmarkNode> {
   const nodes = await loadNodes(config);
   const normalizedUrl = normalizeUrl(url);
+  if (!isSupportedBookmarkUrl(normalizedUrl)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
   const duplicate = nodes.find((node) => node.nodeType === 'bookmark' && node.urlKey === normalizedUrl);
   if (duplicate) throw new DuplicateBookmarkError(duplicate);
   const siblings = nodes.filter((node) => node.parentId === parentId);
@@ -80,6 +82,7 @@ export async function updateNode(config: ConnectionConfig, node: BookmarkNode, c
   const next = { ...node, ...changes, updatedAt: now() };
   if (next.nodeType === 'bookmark' && next.url) {
     next.url = normalizeUrl(next.url);
+    if (!isSupportedBookmarkUrl(next.url)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
     next.urlKey = next.url;
     const nodes = await loadNodes(config);
     const duplicate = nodes.find((item) => item.nodeType === 'bookmark' && item.urlKey === next.urlKey && item.id !== node.id);
@@ -113,12 +116,18 @@ export async function moveNode(config: ConnectionConfig, draggedId: string, targ
   const dragged = nodes.find((node) => node.id === draggedId);
   const target = nodes.find((node) => node.id === targetId);
   if (!dragged || !target || dragged.id === target.id) return;
-  if (target.nodeType === 'folder' && mode === 'inside') {
-    let parent = target;
-    while (parent.parentId) {
-      if (parent.parentId === dragged.id) throw new Error('不能将目录移动到自己的子目录。');
-      parent = nodes.find((node) => node.id === parent.parentId) ?? parent;
+  const destinationParentId = target.nodeType === 'folder' && mode === 'inside' ? target.id : target.parentId;
+  if (dragged.nodeType === 'folder') {
+    let ancestorId = destinationParentId;
+    const visited = new Set<string>();
+    while (ancestorId) {
+      if (ancestorId === dragged.id) throw new Error('不能将目录移动到自己或自己的子目录中。');
+      if (visited.has(ancestorId)) throw new Error('目标目录层级异常，无法移动。');
+      visited.add(ancestorId);
+      ancestorId = nodes.find((node) => node.id === ancestorId)?.parentId ?? null;
     }
+  }
+  if (target.nodeType === 'folder' && mode === 'inside') {
     const siblings = nodes.filter((node) => node.parentId === target.id && node.id !== dragged.id);
     const next = { ...dragged, parentId: target.id, sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000, updatedAt: now() };
     await persistNode(config, next, 'update');

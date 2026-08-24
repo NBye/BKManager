@@ -1,11 +1,8 @@
-import { bulkUpsert, ensureIndex, fetchAllNodes } from './es';
-import { getMeta, getNodes, getOperations, putMeta, putNode, putOperation, removeOperations, putNodes } from './db';
+import { bulkDelete, bulkUpsert, ensureIndex, fetchAllNodes } from './es';
+import { clearNodes, getMeta, getNodes, getOperations, putMeta, putNode, putOperation, removeOperations, putNodes } from './db';
+import { nodeIdentity, sanitizeNodes } from './nodes';
 import type { BookmarkNode, ConnectionConfig, SyncOperation } from './types';
 import { getProfileKey, now } from './types';
-
-function identity(node: BookmarkNode): string {
-  return node.nodeType === 'bookmark' ? `bookmark:${node.urlKey ?? node.url}` : `folder:${node.id}`;
-}
 
 function chooseNewer(left: BookmarkNode, right: BookmarkNode): BookmarkNode {
   return left.updatedAt >= right.updatedAt ? left : right;
@@ -13,9 +10,9 @@ function chooseNewer(left: BookmarkNode, right: BookmarkNode): BookmarkNode {
 
 function mergeNodes(localNodes: BookmarkNode[], remoteNodes: BookmarkNode[]): BookmarkNode[] {
   const merged = new Map<string, BookmarkNode>();
-  for (const node of localNodes) merged.set(identity(node), node);
+  for (const node of localNodes) merged.set(nodeIdentity(node), node);
   for (const node of remoteNodes) {
-    const key = identity(node);
+    const key = nodeIdentity(node);
     const current = merged.get(key);
     merged.set(key, current ? chooseNewer(current, node) : node);
   }
@@ -53,8 +50,12 @@ export async function syncProfile(config: ConnectionConfig): Promise<void> {
     await ensureIndex(config);
     const localNodes = await getNodes(profileKey);
     const remoteNodes = await fetchAllNodes(config);
-    const merged = mergeNodes(localNodes, remoteNodes);
+    const merged = sanitizeNodes(mergeNodes(localNodes, remoteNodes));
+    const mergedIds = new Set(merged.map((node) => node.id));
+    const staleRemoteIds = [...new Set(remoteNodes.filter((node) => !mergedIds.has(node.id)).map((node) => node.id))];
+    await bulkDelete(config, staleRemoteIds);
     await bulkUpsert(config, merged);
+    await clearNodes(profileKey);
     await putNodes(profileKey, merged);
     await removeOperations(profileKey);
     await putMeta({ profileKey, lastSyncAt: now(), localDataUpdatedAt: now(), syncStatus: 'idle' });
@@ -71,7 +72,10 @@ export async function initializeProfile(config: ConnectionConfig): Promise<Bookm
   if (localNodes.length) return localNodes;
   await ensureIndex(config);
   const remoteNodes = await fetchAllNodes(config);
-  await putNodes(profileKey, remoteNodes);
+  const nodes = sanitizeNodes(remoteNodes);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  await bulkDelete(config, [...new Set(remoteNodes.filter((node) => !nodeIds.has(node.id)).map((node) => node.id))]);
+  await putNodes(profileKey, nodes);
   await putMeta({ profileKey, lastSyncAt: now(), localDataUpdatedAt: now(), syncStatus: 'idle' });
-  return remoteNodes;
+  return nodes;
 }
