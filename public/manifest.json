@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "ES Bookmark Manager",
+  "version": "0.1.0",
+  "description": "离线优先的 Elasticsearch 跨浏览器收藏管理插件",
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "permissions": ["storage", "contextMenus", "activeTab"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "ES Bookmark Manager",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png"
+    },
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/options.html"
+}

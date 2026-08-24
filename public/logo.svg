@@ -1,0 +1,21 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+    <filter id="shadow" x="18" y="13" width="92" height="103" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#172554" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
+  <g filter="url(#shadow)">
+    <path d="M39 29C39 25.6863 41.6863 23 45 23H83C86.3137 23 89 25.6863 89 29V99L64 84L39 99V29Z" fill="white"/>
+    <path d="M49 36H79" stroke="#BFDBFE" stroke-width="6" stroke-linecap="round"/>
+    <path d="M49 48H71" stroke="#BFDBFE" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <path d="M91 74C94.866 74 98 77.134 98 81C98 84.866 94.866 88 91 88H85" stroke="#A7F3D0" stroke-width="6" stroke-linecap="round"/>
+  <path d="M87 82L82 88L87 94" stroke="#A7F3D0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M37 70C33.134 70 30 66.866 30 63C30 59.134 33.134 56 37 56H43" stroke="#FDE68A" stroke-width="6" stroke-linecap="round"/>
+  <path d="M41 62L46 56L41 50" stroke="#FDE68A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
