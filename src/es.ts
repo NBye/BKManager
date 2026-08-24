@@ -32,10 +32,10 @@ async function request<T>(config: ConnectionConfig, url: string, init: RequestIn
   return body as T;
 }
 
-export async function ensureIndex(config: ConnectionConfig): Promise<void> {
+export async function ensureIndex(config: ConnectionConfig): Promise<boolean> {
   try {
     await request(config, endpoint(config), { method: 'HEAD' });
-    return;
+    return false;
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('404')) throw error;
   }
@@ -61,10 +61,10 @@ export async function ensureIndex(config: ConnectionConfig): Promise<void> {
         }
       })
     });
+    return true;
   } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes('resource_already_exists_exception')) {
-      throw new Error('目标索引不存在，且当前授权 Key 没有创建索引权限。请先由管理员创建索引，或为授权 Key 增加 create_index 权限。');
-    }
+    if (error instanceof Error && error.message.includes('resource_already_exists_exception')) return false;
+    throw new Error('目标索引不存在，且当前授权 Key 没有创建索引权限。请先由管理员创建索引，或为授权 Key 增加 create_index 权限。');
   }
 }
 
@@ -117,7 +117,7 @@ export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]
     lines.push(JSON.stringify({ index: { _index: getIndexName(config), _id: node.id } }));
     lines.push(JSON.stringify(node));
   }
-  const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk?refresh=wait_for`, {
+  const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
@@ -129,7 +129,7 @@ export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promi
   if (!ids.length) return;
   const lines: string[] = [];
   for (const id of ids) lines.push(JSON.stringify({ delete: { _index: getIndexName(config), _id: id } }));
-  const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk?refresh=wait_for`, {
+  const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
@@ -138,7 +138,8 @@ export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promi
 }
 
 export async function testConnection(config: ConnectionConfig): Promise<void> {
-  await ensureIndex(config);
+  const created = await ensureIndex(config);
+  if (created) await new Promise((resolve) => setTimeout(resolve, 1000));
   await request(config, endpoint(config, '/_search'), {
     method: 'POST',
     body: JSON.stringify({ size: 0, query: { match_all: {} } })

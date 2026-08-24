@@ -61,7 +61,10 @@ async function editNode(node: BookmarkNode): Promise<void> {
   const config = await requireConfig();
   if (node.nodeType === 'folder') {
     const name = await showTextDialog('编辑目录', '目录名称', node.name ?? '未命名');
-    if (name) await updateNode(config, node, { name });
+    if (name) {
+      const updated = await updateNode(config, node, { name });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+    }
   } else {
     const result = await showBookmarkDialog(currentNodes, {
       url: node.url ?? '',
@@ -69,9 +72,12 @@ async function editNode(node: BookmarkNode): Promise<void> {
       iconUrl: node.iconUrl,
       folderId: node.parentId
     });
-    if (result) await updateNode(config, node, { title: result.title, url: result.url, iconUrl: result.iconUrl });
+    if (result) {
+      const updated = await updateNode(config, node, { title: result.title, url: result.url, iconUrl: result.iconUrl });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+    }
   }
-  await refresh();
+  renderCurrentTree();
 }
 
 function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
@@ -86,7 +92,13 @@ function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
   remove.addEventListener('click', async () => {
     closeContextMenu();
     if (!await showConfirmDialog('删除收藏', `确定删除“${node.name ?? node.title ?? node.url}”吗？`, '确认删除')) return;
-    try { await deleteSubtree(await requireConfig(), node.id); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '删除失败', true); }
+    try {
+      const deletedIds = await deleteSubtree(await requireConfig(), node.id);
+      const deleted = new Set(deletedIds);
+      currentNodes = currentNodes.filter((item) => !deleted.has(item.id));
+      if (selectedFolderId && deleted.has(selectedFolderId)) selectedFolderId = null;
+      renderCurrentTree();
+    } catch (error) { showStatus(error instanceof Error ? error.message : '删除失败', true); }
   });
   menu.append(edit, remove);
   document.body.append(menu);
@@ -122,10 +134,19 @@ function renderCurrentTree(): void {
     onSelect: (node) => { if (node.nodeType === 'folder') { selectedFolderId = node.id; renderCurrentTree(); } },
     onInlineEdit: async (node, name) => {
       inlineEditFolderId = null;
-      try { await updateNode(await requireConfig(), node, { name }); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '保存目录失败', true); }
+      try {
+        const updated = await updateNode(await requireConfig(), node, { name });
+        currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+        renderCurrentTree();
+      } catch (error) { showStatus(error instanceof Error ? error.message : '保存目录失败', true); }
     },
     onMove: async (draggedId, targetId, mode) => {
-      try { await moveNode(await requireConfig(), draggedId, targetId, mode); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '移动失败', true); }
+      try {
+        const moved = await moveNode(await requireConfig(), draggedId, targetId, mode);
+        const movedById = new Map(moved.map((item) => [item.id, item]));
+        currentNodes = currentNodes.map((item) => movedById.get(item.id) ?? item);
+        renderCurrentTree();
+      } catch (error) { showStatus(error instanceof Error ? error.message : '移动失败', true); }
     },
     onContextMenu: showNodeContextMenu,
     onOpen: (node) => { if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url }); }
@@ -152,15 +173,17 @@ async function addBookmark(): Promise<void> {
     const result = await showBookmarkDialog(currentNodes, { url: tab.url, title: tab.title ?? tab.url, iconUrl: tab.favIconUrl, folderId: selectedFolderId });
     if (!result) return;
     try {
-      await createBookmark(config, result.folderId, result.url, result.title, result.iconUrl);
+      const created = await createBookmark(config, result.folderId, result.url, result.title, result.iconUrl);
+      currentNodes = [...currentNodes, created];
     } catch (error) {
       if (!(error instanceof DuplicateBookmarkError)) throw error;
       const targetFolder = result.folderId ? currentNodes.find((node) => node.id === result.folderId)?.name ?? '选中文件夹' : '根目录';
       const shouldMove = await showConfirmDialog('地址已收藏', `${error.message}\n\n是否迁移到${targetFolder}，并更新标题和图标？`, '迁移收藏');
       if (!shouldMove) return;
-      await updateNode(config, error.existing, { parentId: result.folderId, title: result.title, iconUrl: result.iconUrl });
+      const updated = await updateNode(config, error.existing, { parentId: result.folderId, title: result.title, iconUrl: result.iconUrl });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
-    await refresh();
+    renderCurrentTree();
   } catch (error) { showStatus(error instanceof Error ? error.message : '收藏失败', true); }
 }
 
@@ -168,9 +191,10 @@ async function addFolder(): Promise<void> {
   try {
     const config = await requireConfig();
     const node = await createFolder(config, selectedFolderId, '未命名');
+    currentNodes = [...currentNodes, node];
     selectedFolderId = node.id;
     inlineEditFolderId = node.id;
-    await refresh();
+    renderCurrentTree();
   } catch (error) { showStatus(error instanceof Error ? error.message : '创建目录失败', true); }
 }
 

@@ -7,6 +7,15 @@ export interface BookmarkDialogData {
   folderId: string | null;
 }
 
+function getOrigin(value: string): string | null {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 function modalRoot(): HTMLElement {
   let root = document.querySelector<HTMLElement>('#modal-root');
   if (!root) {
@@ -50,6 +59,19 @@ export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialo
     const { panel } = createModal('收藏地址');
     const form = document.createElement('form');
     form.className = 'form modal-form';
+    const iconField = document.createElement('div');
+    iconField.className = 'bookmark-icon-field';
+    const iconLabel = document.createElement('span');
+    iconLabel.textContent = '网站图标';
+    const iconPreview = document.createElement('span');
+    iconPreview.className = 'bookmark-icon-preview';
+    const iconImage = document.createElement('img');
+    iconImage.alt = '网站图标预览';
+    const iconFallback = document.createElement('span');
+    iconFallback.className = 'bookmark-icon-fallback';
+    iconFallback.textContent = '无图标';
+    iconPreview.append(iconImage, iconFallback);
+    iconField.append(iconLabel, iconPreview);
     const title = document.createElement('label');
     title.textContent = '标题';
     const titleInput = document.createElement('input');
@@ -63,6 +85,28 @@ export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialo
     urlInput.value = initial.url;
     urlInput.required = true;
     url.append(urlInput);
+    const initialOrigin = getOrigin(initial.url);
+    let previewIconUrl = initial.iconUrl;
+    const updateIconPreview = () => {
+      const origin = getOrigin(urlInput.value);
+      const nextIconUrl = origin === initialOrigin && initial.iconUrl ? initial.iconUrl : origin ? `${origin}/favicon.ico` : undefined;
+      if (nextIconUrl === previewIconUrl && iconImage.src) return;
+      previewIconUrl = nextIconUrl;
+      iconFallback.classList.toggle('hidden', Boolean(nextIconUrl));
+      iconImage.classList.toggle('hidden', !nextIconUrl);
+      if (nextIconUrl) iconImage.src = nextIconUrl;
+      else iconImage.removeAttribute('src');
+    };
+    iconImage.addEventListener('load', () => {
+      iconImage.classList.remove('hidden');
+      iconFallback.classList.add('hidden');
+    });
+    iconImage.addEventListener('error', () => {
+      iconImage.classList.add('hidden');
+      iconFallback.classList.remove('hidden');
+    });
+    urlInput.addEventListener('input', updateIconPreview);
+    updateIconPreview();
     const actions = document.createElement('div');
     actions.className = 'form-actions';
     const cancel = document.createElement('button');
@@ -75,11 +119,11 @@ export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialo
     submit.className = 'primary';
     submit.textContent = '保存收藏';
     actions.append(cancel, submit);
-    form.append(title, url, actions);
+    form.append(iconField, title, url, actions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       closeModal();
-      resolve({ url: urlInput.value.trim(), title: titleInput.value.trim(), iconUrl: initial.iconUrl, folderId: initial.folderId });
+      resolve({ url: urlInput.value.trim(), title: titleInput.value.trim(), iconUrl: previewIconUrl, folderId: initial.folderId });
     });
     panel.append(form);
     setTimeout(() => titleInput.focus(), 0);

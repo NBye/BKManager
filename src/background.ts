@@ -1,3 +1,11 @@
+import { getConfig, isConfigComplete } from './config';
+import { scheduleSync } from './sync';
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  if (!message || typeof message !== 'object' || !('type' in message) || message.type !== 'schedule-sync') return;
+  void getConfig().then((config) => { if (isConfigComplete(config)) scheduleSync(config); });
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'bookmark-page',

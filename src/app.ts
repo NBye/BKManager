@@ -1,7 +1,7 @@
 import { getConfig, isConfigComplete } from './config';
 import { getNodes } from './db';
 import { isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
-import { initializeProfile, saveLocalNode, syncProfile } from './sync';
+import { initializeProfile, requestSync, saveLocalNode, syncProfile } from './sync';
 import type { BookmarkNode, ConnectionConfig, NodeType } from './types';
 import { getProfileKey, makeId, normalizeUrl, now } from './types';
 
@@ -26,21 +26,21 @@ export async function loadNodes(config: ConnectionConfig): Promise<BookmarkNode[
   return sanitizeNodes(nodes);
 }
 
+async function loadLocalNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
+  return sanitizeNodes(await getNodes(getProfileKey(config)));
+}
+
 export async function persistNode(config: ConnectionConfig, node: BookmarkNode, action: 'create' | 'update' | 'delete'): Promise<void> {
   await persistNodes(config, [{ node, action }]);
 }
 
 export async function persistNodes(config: ConnectionConfig, entries: Array<{ node: BookmarkNode; action: 'create' | 'update' | 'delete' }>): Promise<void> {
   for (const entry of entries) await saveLocalNode(config, entry.node, entry.action);
-  try {
-    await syncProfile(config);
-  } catch {
-    // The local operation remains queued for a later manual sync.
-  }
+  requestSync(config);
 }
 
 export async function createFolder(config: ConnectionConfig, parentId: string | null, name: string): Promise<BookmarkNode> {
-  const nodes = await loadNodes(config);
+  const nodes = await loadLocalNodes(config);
   const siblings = nodes.filter((node) => node.parentId === parentId);
   const node: BookmarkNode = {
     id: makeId(),
@@ -56,7 +56,7 @@ export async function createFolder(config: ConnectionConfig, parentId: string | 
 }
 
 export async function createBookmark(config: ConnectionConfig, parentId: string | null, url: string, title: string, iconUrl?: string): Promise<BookmarkNode> {
-  const nodes = await loadNodes(config);
+  const nodes = await loadLocalNodes(config);
   const normalizedUrl = normalizeUrl(url);
   if (!isSupportedBookmarkUrl(normalizedUrl)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
   const duplicate = nodes.find((node) => node.nodeType === 'bookmark' && node.urlKey === normalizedUrl);
@@ -84,7 +84,7 @@ export async function updateNode(config: ConnectionConfig, node: BookmarkNode, c
     next.url = normalizeUrl(next.url);
     if (!isSupportedBookmarkUrl(next.url)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
     next.urlKey = next.url;
-    const nodes = await loadNodes(config);
+    const nodes = await loadLocalNodes(config);
     const duplicate = nodes.find((item) => item.nodeType === 'bookmark' && item.urlKey === next.urlKey && item.id !== node.id);
     if (duplicate) throw new Error('该地址已经存在，不能创建重复收藏。');
   }
@@ -92,8 +92,8 @@ export async function updateNode(config: ConnectionConfig, node: BookmarkNode, c
   return next;
 }
 
-export async function deleteSubtree(config: ConnectionConfig, nodeId: string): Promise<void> {
-  const nodes = await loadNodes(config);
+export async function deleteSubtree(config: ConnectionConfig, nodeId: string): Promise<string[]> {
+  const nodes = await loadLocalNodes(config);
   const toDelete = new Set<string>([nodeId]);
   let changed = true;
   while (changed) {
@@ -109,13 +109,14 @@ export async function deleteSubtree(config: ConnectionConfig, nodeId: string): P
     node: { ...node, deletedAt: now(), updatedAt: now() },
     action: 'delete' as const
   })));
+  return [...toDelete];
 }
 
-export async function moveNode(config: ConnectionConfig, draggedId: string, targetId: string, mode: 'before' | 'after' | 'inside'): Promise<void> {
-  const nodes = await loadNodes(config);
+export async function moveNode(config: ConnectionConfig, draggedId: string, targetId: string, mode: 'before' | 'after' | 'inside'): Promise<BookmarkNode[]> {
+  const nodes = await loadLocalNodes(config);
   const dragged = nodes.find((node) => node.id === draggedId);
   const target = nodes.find((node) => node.id === targetId);
-  if (!dragged || !target || dragged.id === target.id) return;
+  if (!dragged || !target || dragged.id === target.id) return [];
   const destinationParentId = target.nodeType === 'folder' && mode === 'inside' ? target.id : target.parentId;
   if (dragged.nodeType === 'folder') {
     let ancestorId = destinationParentId;
@@ -131,17 +132,20 @@ export async function moveNode(config: ConnectionConfig, draggedId: string, targ
     const siblings = nodes.filter((node) => node.parentId === target.id && node.id !== dragged.id);
     const next = { ...dragged, parentId: target.id, sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000, updatedAt: now() };
     await persistNode(config, next, 'update');
-    return;
+    return [next];
   }
   const parentId = target.parentId;
   const siblings = nodes.filter((node) => node.parentId === parentId && node.id !== dragged.id).sort((a, b) => a.sortOrder - b.sortOrder);
   const targetIndex = siblings.findIndex((node) => node.id === target.id);
   const insertAt = Math.max(0, targetIndex + (mode === 'after' ? 1 : 0));
   const reordered = [...siblings.slice(0, insertAt), dragged, ...siblings.slice(insertAt)];
-  await persistNodes(config, reordered.map((item, index) => ({
-    node: { ...item, parentId, sortOrder: (index + 1) * 1000, updatedAt: now() },
+  const updatedAt = now();
+  const updated = reordered.map((item, index) => ({ ...item, parentId, sortOrder: (index + 1) * 1000, updatedAt }));
+  await persistNodes(config, updated.map((node) => ({
+    node,
     action: 'update' as const
   })));
+  return updated;
 }
 
 export async function syncNow(config: ConnectionConfig): Promise<void> {

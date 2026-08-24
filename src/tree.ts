@@ -121,11 +121,17 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
         const input = document.createElement('input');
         input.className = 'tree-inline-input';
         input.value = node.name ?? '未命名';
+        let finished = false;
+        const finish = (name: string) => {
+          if (finished) return;
+          finished = true;
+          options.onInlineEdit?.(node, name);
+        };
         input.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter') { event.preventDefault(); options.onInlineEdit?.(node, input.value.trim() || '未命名'); }
-          if (event.key === 'Escape') options.onInlineEdit?.(node, node.name ?? '未命名');
+          if (event.key === 'Enter') { event.preventDefault(); finish(input.value.trim() || '未命名'); }
+          if (event.key === 'Escape') { event.preventDefault(); finish(node.name ?? '未命名'); }
         });
-        input.addEventListener('blur', () => options.onInlineEdit?.(node, input.value.trim() || '未命名'));
+        input.addEventListener('blur', () => finish(input.value.trim() || '未命名'));
         row.append(input);
         setTimeout(() => { input.focus(); input.select(); }, 0);
       } else {

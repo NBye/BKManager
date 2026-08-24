@@ -1,7 +1,7 @@
 import './styles.css';
 import { createFolder, deleteSubtree, loadNodes, moveNode, requireConfig, syncNow, updateNode } from './app';
 import { getConfig } from './config';
-import { getNodes, putNode } from './db';
+import { getNodes } from './db';
 import { saveLocalNode } from './sync';
 import type { BackupFile, BookmarkNode } from './types';
 import { getProfileKey, now } from './types';
@@ -11,6 +11,7 @@ import { showBookmarkDialog, showConfirmDialog, showTextDialog } from './ui';
 const tree = document.querySelector<HTMLElement>('#tree')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 let inlineEditFolderId: string | null = null;
+let currentNodes: BookmarkNode[] = [];
 
 function showStatus(message: string, error = false): void {
   status.textContent = message;
@@ -20,39 +21,66 @@ function showStatus(message: string, error = false): void {
 async function refresh(): Promise<void> {
   try {
     const config = await requireConfig();
-    const nodes = await loadNodes(config);
-    renderTree(tree, nodes, {
-      showActions: true,
-      showDate: true,
-      inlineEditFolderId,
-      onAddFolder: async (parent) => {
-        const node = await createFolder(config, parent.id, '未命名');
-        inlineEditFolderId = node.id;
-        await refresh();
-      },
-      onInlineEdit: async (node, name) => { inlineEditFolderId = null; await updateNode(config, node, { name }); await refresh(); },
-      onMove: async (draggedId, targetId, mode) => { try { await moveNode(config, draggedId, targetId, mode); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '移动失败', true); } },
-      onOpen: (node) => { if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url }); },
-      onEdit: async (node) => { await editNode(config, node); },
-      onDelete: async (node) => { if (await showConfirmDialog('删除收藏', `确定级联删除“${node.name ?? node.title ?? node.url}”吗？`, '确认删除')) { await deleteSubtree(config, node.id); await refresh(); } }
-    });
-    showStatus(`目录 ${nodes.filter((node) => node.nodeType === 'folder').length} 个，收藏 ${nodes.filter((node) => node.nodeType === 'bookmark').length} 条`);
+    currentNodes = await loadNodes(config);
+    await refreshView(config);
   } catch (error) {
     tree.innerHTML = '<div class="empty">请先配置 Elasticsearch 连接。</div>';
     showStatus(error instanceof Error ? error.message : '加载失败', true);
   }
 }
 
+async function refreshView(config: Awaited<ReturnType<typeof requireConfig>>): Promise<void> {
+  renderTree(tree, currentNodes, {
+    showActions: true,
+    showDate: true,
+    inlineEditFolderId,
+    onAddFolder: async (parent) => {
+      const node = await createFolder(config, parent.id, '未命名');
+      currentNodes = [...currentNodes, node];
+      inlineEditFolderId = node.id;
+      await refreshView(config);
+    },
+    onInlineEdit: async (node, name) => {
+      inlineEditFolderId = null;
+      const updated = await updateNode(config, node, { name });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+      await refreshView(config);
+    },
+    onMove: async (draggedId, targetId, mode) => {
+      const moved = await moveNode(config, draggedId, targetId, mode);
+      const movedById = new Map(moved.map((item) => [item.id, item]));
+      currentNodes = currentNodes.map((item) => movedById.get(item.id) ?? item);
+      await refreshView(config);
+    },
+    onOpen: (node) => { if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url }); },
+    onEdit: async (node) => { await editNode(config, node); },
+    onDelete: async (node) => {
+      if (!await showConfirmDialog('删除收藏', `确定级联删除“${node.name ?? node.title ?? node.url}”吗？`, '确认删除')) return;
+      const deletedIds = await deleteSubtree(config, node.id);
+      const deleted = new Set(deletedIds);
+      currentNodes = currentNodes.filter((item) => !deleted.has(item.id));
+      await refreshView(config);
+    }
+  });
+  showStatus(`目录 ${currentNodes.filter((node) => node.nodeType === 'folder').length} 个，收藏 ${currentNodes.filter((node) => node.nodeType === 'bookmark').length} 条`);
+  void config;
+}
+
 async function editNode(config: Awaited<ReturnType<typeof requireConfig>>, node: BookmarkNode): Promise<void> {
   if (node.nodeType === 'folder') {
     const name = await showTextDialog('编辑目录', '目录名称', node.name ?? '未命名');
-    if (name) await updateNode(config, node, { name });
+    if (name) {
+      const updated = await updateNode(config, node, { name });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+    }
   } else {
-    const nodes = await loadNodes(config);
-    const result = await showBookmarkDialog(nodes, { url: node.url ?? '', title: node.title ?? '', iconUrl: node.iconUrl, folderId: node.parentId });
-    if (result) await updateNode(config, node, { title: result.title, url: result.url, parentId: result.folderId, iconUrl: result.iconUrl });
+    const result = await showBookmarkDialog(currentNodes, { url: node.url ?? '', title: node.title ?? '', iconUrl: node.iconUrl, folderId: node.parentId });
+    if (result) {
+      const updated = await updateNode(config, node, { title: result.title, url: result.url, parentId: result.folderId, iconUrl: result.iconUrl });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+    }
   }
-  await refresh();
+  await refreshView(config);
 }
 
 function downloadBackup(backup: BackupFile): void {
@@ -112,12 +140,10 @@ document.querySelector<HTMLButtonElement>('#settings')!.addEventListener('click'
 document.querySelector<HTMLButtonElement>('#sync')!.addEventListener('click', async () => { try { showStatus('同步中…'); await syncNow(await requireConfig()); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '同步失败', true); } });
 document.querySelector<HTMLButtonElement>('#add-folder')!.addEventListener('click', async () => {
   const config = await requireConfig();
-  const nodes = await loadNodes(config);
-  const node: BookmarkNode = { id: crypto.randomUUID(), nodeType: 'folder', parentId: null, name: '未命名', sortOrder: (nodes.length + 1) * 1000, createdAt: now(), updatedAt: now() };
-  await saveLocalNode(config, node, 'create');
-  await syncNow(config);
+  const node = await createFolder(config, null, '未命名');
+  currentNodes = [...currentNodes, node];
   inlineEditFolderId = node.id;
-  await refresh();
+  await refreshView(config);
 });
 document.querySelector<HTMLButtonElement>('#export')!.addEventListener('click', () => void exportBackup().catch((error) => showStatus(error instanceof Error ? error.message : '导出失败', true)));
 const importFile = document.querySelector<HTMLInputElement>('#import-file')!;

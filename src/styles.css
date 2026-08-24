@@ -73,6 +73,10 @@ button { cursor: pointer; }
 .folder-level-select { width: 100%; }
 .modal-form { gap: 10px; }
 .modal-panel label, .modal-panel input, .modal-panel select, .modal-panel textarea, .modal-panel .primary, .modal-panel .secondary { font-size: 12px; }
+.bookmark-icon-field { display: grid; gap: 4px; color: #374151; font-size: 12px; }
+.bookmark-icon-preview { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; overflow: hidden; border: 1px solid #d1d5db; border-radius: 7px; background: #f7f7f7; }
+.bookmark-icon-preview img { width: 22px; height: 22px; object-fit: contain; }
+.bookmark-icon-fallback { color: #888; font-size: 10px; white-space: nowrap; }
 .node-context-menu { position: fixed; z-index: 50; display: flex; min-width: 76px; flex-direction: column; padding: 3px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff; box-shadow: 0 6px 18px rgb(0 0 0 / 18%); }
 .node-context-menu button { border: 0; border-radius: 4px; padding: 5px 10px; color: #202124; background: transparent; text-align: left; font-size: 12px; }
 .node-context-menu button:hover { background: #ededed; color: #202124; }

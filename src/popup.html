@@ -21,7 +21,13 @@
           <label>ES 地址<input id="inline-es-url" type="url" placeholder="https://es.example.com" required /></label>
           <label>授权 Key<input id="inline-api-key" type="password" required /></label>
           <label>索引前缀<input id="inline-index-prefix" placeholder="bookmark_company_" required /></label>
-          <div class="form-actions"><button id="inline-config-test" type="button" class="secondary">测试连接</button><button type="submit" class="primary">保存并连接</button></div>
+          <label>
+            <p>允许系统可自动创建索引的前缀, company_ 实际创建的索引: company_bookmarks。</p>
+            </label>
+          <div class="form-actions">
+            <button id="inline-config-test" type="button" class="secondary">测试连接</button>
+            <button type="submit" class="primary">保存并连接</button>
+          </div>
         </form>
       </section>
       <div id="tree" class="tree popup-tree"></div>
