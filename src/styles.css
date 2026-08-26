@@ -10,8 +10,8 @@ button, input, select { font: inherit; }
 button { cursor: pointer; }
 
 .page { padding: 18px; }
-.popup-shell { width: 320px; min-height: 520px; max-height: 680px; overflow: auto; background: #fff; }
-.popup-shell.config-mode { min-height: 520px; max-height: 680px; }
+.popup-shell { width: 320px; min-height: 520px;overflow: auto; background: #fff; }
+.popup-shell.config-mode { min-height: 520px; }
 .popup-header { display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 0 18px; border-bottom: 1px solid #e6e6e6; }
 .popup-header h1 { margin: 0; font-size: 16px; font-weight: 650; }
 .header-actions { display: flex; align-items: center; gap: 5px; }
