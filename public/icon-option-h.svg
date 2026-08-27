@@ -1,0 +1,15 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <mask id="center-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="128" height="128">
+      <rect width="128" height="128" fill="white"/>
+      <path d="M64 51L84 62V84L64 96L44 84V62L64 51Z" fill="black"/>
+    </mask>
+  </defs>
+  <g mask="url(#center-cutout)">
+    <path d="M64 14L108 39L64 64L20 39L64 14Z" fill="#EAF6FF"/>
+    <path d="M20 39L64 64V110L20 85V39Z" fill="#15171A"/>
+    <path d="M64 64L108 39V85L64 110V64Z" fill="#35A9F5"/>
+  </g>
+  <path d="M64 51L84 62V84L64 96L44 84V62L64 51Z" stroke="#15171A" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M64 61L75 67L64 74L53 67L64 61Z" fill="#A66A3F"/>
+</svg>
