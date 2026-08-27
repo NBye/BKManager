@@ -22,6 +22,11 @@ export interface BookmarkDialogData {
   folderId: string | null;
 }
 
+interface BookmarkFormParts {
+  form: HTMLFormElement;
+  focusTitle: () => void;
+}
+
 function getOrigin(value: string): string | null {
   try {
     const url = new URL(value.trim());
@@ -69,11 +74,9 @@ function createModal(title: string): { panel: HTMLElement; close: () => void } {
   return { panel, close: closeModal };
 }
 
-export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialogData): Promise<BookmarkDialogData | null> {
-  return new Promise((resolve) => {
-    const { panel } = createModal('收藏地址');
+function createBookmarkForm(nodes: BookmarkNode[], initial: BookmarkDialogData, onSubmit: (value: BookmarkDialogData) => void, onCancel: () => void, pageForm = false): BookmarkFormParts {
     const form = document.createElement('form');
-    form.className = 'form modal-form';
+    form.className = `form ${pageForm ? 'capture-form' : 'modal-form'}`;
     const iconField = document.createElement('div');
     iconField.className = 'bookmark-icon-field';
     const iconLabel = document.createElement('span');
@@ -100,6 +103,79 @@ export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialo
     urlInput.value = initial.url;
     urlInput.required = true;
     url.append(urlInput);
+    const folder = document.createElement('label');
+    folder.textContent = '保存到文件夹';
+    const folders = nodes.filter((node) => node.nodeType === 'folder' && !node.deletedAt).sort((left, right) => left.sortOrder - right.sortOrder);
+    const foldersByParent = new Map<string | null, BookmarkNode[]>();
+    for (const folderNode of folders) {
+      const siblings = foldersByParent.get(folderNode.parentId) ?? [];
+      siblings.push(folderNode);
+      foldersByParent.set(folderNode.parentId, siblings);
+    }
+    const folderById = new Map(folders.map((folderNode) => [folderNode.id, folderNode]));
+    let selectedFolderId = initial.folderId;
+    const browser = document.createElement('div');
+    browser.className = 'folder-browser';
+    const breadcrumb = document.createElement('div');
+    breadcrumb.className = 'folder-breadcrumb';
+    const childFolders = document.createElement('div');
+    childFolders.className = 'folder-child-list';
+    const getSelectedPath = (): BookmarkNode[] => {
+      const path: BookmarkNode[] = [];
+      const visited = new Set<string>();
+      let currentId = selectedFolderId;
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        const folderNode = folderById.get(currentId);
+        if (!folderNode) break;
+        path.unshift(folderNode);
+        currentId = folderNode.parentId;
+      }
+      return path;
+    };
+    const renderFolderBrowser = (): void => {
+      breadcrumb.replaceChildren();
+      childFolders.replaceChildren();
+      const selectedPathNodes = getSelectedPath();
+      const root = document.createElement('button');
+      root.type = 'button';
+      root.className = `folder-breadcrumb-item${selectedFolderId === null ? ' active' : ''}`;
+      root.textContent = '收藏';
+      root.addEventListener('click', () => { selectedFolderId = null; renderFolderBrowser(); });
+      breadcrumb.append(root);
+      for (const folderNode of selectedPathNodes) {
+        const separator = document.createElement('span');
+        separator.className = 'folder-breadcrumb-separator';
+        separator.textContent = '/';
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = `folder-breadcrumb-item${selectedFolderId === folderNode.id ? ' active' : ''}`;
+        item.textContent = folderNode.name ?? '未命名目录';
+        item.addEventListener('click', () => { selectedFolderId = folderNode.id; renderFolderBrowser(); });
+        breadcrumb.append(separator, item);
+      }
+      const children = foldersByParent.get(selectedFolderId) ?? [];
+      if (!children.length) {
+        const empty = document.createElement('span');
+        empty.className = 'folder-child-empty';
+        empty.textContent = '当前目录下没有子文件夹';
+        childFolders.append(empty);
+      } else {
+        for (const folderNode of children) {
+          const child = document.createElement('button');
+          child.type = 'button';
+          child.className = 'folder-child-button';
+          child.innerHTML = '<span aria-hidden="true">📁</span>';
+          child.append(document.createTextNode(folderNode.name ?? '未命名目录'));
+          child.title = `进入 ${folderNode.name ?? '未命名目录'}`;
+          child.addEventListener('click', () => { selectedFolderId = folderNode.id; renderFolderBrowser(); });
+          childFolders.append(child);
+        }
+      }
+    };
+    renderFolderBrowser();
+    browser.append(breadcrumb, childFolders);
+    folder.append(browser);
     const initialOrigin = getOrigin(initial.url);
     let previewIconUrl = initial.iconUrl;
     const updateIconPreview = () => {
@@ -128,20 +204,37 @@ export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialo
     cancel.type = 'button';
     cancel.className = 'secondary';
     cancel.textContent = '取消';
-    cancel.addEventListener('click', () => { closeModal(); resolve(null); });
+    cancel.addEventListener('click', onCancel);
     const submit = document.createElement('button');
     submit.type = 'submit';
     submit.className = 'primary';
     submit.textContent = '保存收藏';
     actions.append(cancel, submit);
-    form.append(iconField, title, url, actions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      closeModal();
-      resolve({ url: urlInput.value.trim(), title: titleInput.value.trim(), iconUrl: previewIconUrl, folderId: initial.folderId });
+      onSubmit({ url: urlInput.value.trim(), title: titleInput.value.trim(), iconUrl: previewIconUrl, folderId: selectedFolderId });
     });
-    panel.append(form);
-    setTimeout(() => titleInput.focus(), 0);
+    form.append(iconField, title, url, folder, actions);
+    return { form, focusTitle: () => { titleInput.focus(); titleInput.select(); } };
+}
+
+export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialogData): Promise<BookmarkDialogData | null> {
+  return new Promise((resolve) => {
+    const { panel } = createModal('收藏地址');
+    const parts = createBookmarkForm(nodes, initial, (value) => { closeModal(); resolve(value); }, () => { closeModal(); resolve(null); });
+    panel.append(parts.form);
+    setTimeout(parts.focusTitle, 0);
+  });
+}
+
+export function showBookmarkFormPage(container: HTMLElement, nodes: BookmarkNode[], initial: BookmarkDialogData): Promise<BookmarkDialogData | null> {
+  return new Promise((resolve) => {
+    const heading = document.createElement('h1');
+    heading.className = 'capture-title';
+    heading.textContent = '收藏地址';
+    const parts = createBookmarkForm(nodes, initial, (value) => { container.replaceChildren(); resolve(value); }, () => { container.replaceChildren(); resolve(null); }, true);
+    container.replaceChildren(heading, parts.form);
+    setTimeout(parts.focusTitle, 0);
   });
 }
 

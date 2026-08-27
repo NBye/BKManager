@@ -28,7 +28,7 @@ function createContextMenus(): void {
     });
     create({
       id: 'bookmark-text',
-      title: '加入BKM收藏',
+      title: '将文本收藏',
       contexts: ['selection']
     });
     create({
@@ -109,10 +109,23 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   const title = info.menuItemId === 'bookmark-link' ? info.linkUrl : (tab?.title ?? url);
   const params = new URLSearchParams({ url, title: title ?? url });
   if (tab?.favIconUrl) params.set('iconUrl', tab.favIconUrl);
-  void chrome.windows.create({
-    url: chrome.runtime.getURL(`src/capture.html?${params.toString()}`),
-    type: 'popup',
-    width: 430,
-    height: 460
+  const width = 360;
+  const height = 520;
+  const browserWindowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+  void chrome.windows.get(browserWindowId).then((browserWindow) => {
+    const left = browserWindow.left !== undefined && browserWindow.width !== undefined
+      ? Math.max(0, Math.round(browserWindow.left + (browserWindow.width - width) / 2))
+      : undefined;
+    const top = browserWindow.top !== undefined && browserWindow.height !== undefined
+      ? Math.max(0, Math.round(browserWindow.top + (browserWindow.height - height) / 2))
+      : undefined;
+    return chrome.windows.create({
+      url: chrome.runtime.getURL(`src/capture.html?${params.toString()}`),
+      type: 'popup',
+      width,
+      height,
+      ...(left === undefined ? {} : { left }),
+      ...(top === undefined ? {} : { top })
+    });
   });
 });
