@@ -1,9 +1,10 @@
 import { getConfig, isConfigComplete } from './config';
 import { getNodes } from './db';
 import { getTextTitle, isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
-import { getStorageProfileKey, initializeProfile, requestSync, saveLocalNode, syncProfile } from './sync';
+import { getStorageProfileKey, initializeProfile, persistLocalChanges, requestSync, syncProfile } from './sync';
 import type { BookmarkNode, ConnectionConfig, NodeType } from './types';
 import { getProfileKey, makeId, normalizeUrl, now } from './types';
+import { getNodeTitle } from './node-service';
 
 export class DuplicateBookmarkError extends Error {
   constructor(public readonly existing: BookmarkNode) {
@@ -22,6 +23,8 @@ export async function requireConfig(): Promise<ConnectionConfig> {
 
 export async function loadNodes(config: ConnectionConfig | null): Promise<BookmarkNode[]> {
   const profileKey = getStorageProfileKey(config);
+  const cachedNodes = await getNodes(profileKey);
+  if (!config || cachedNodes.length) return sanitizeNodes(cachedNodes);
   if (config) {
     try {
       await initializeProfile(config);
@@ -41,7 +44,7 @@ export async function persistNode(config: ConnectionConfig | null, node: Bookmar
 }
 
 export async function persistNodes(config: ConnectionConfig | null, entries: Array<{ node: BookmarkNode; action: 'create' | 'update' | 'delete' }>): Promise<void> {
-  for (const entry of entries) await saveLocalNode(config, entry.node, entry.action);
+  await persistLocalChanges(config, entries);
   requestSync(config);
 }
 
@@ -55,7 +58,9 @@ export async function createFolder(config: ConnectionConfig | null, parentId: st
     name: name.trim(),
     sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000,
     createdAt: now(),
-    updatedAt: now()
+    updatedAt: now(),
+    revision: 1,
+    updatedBy: config?.profileId ?? 'offline'
   };
   await persistNode(config, node, 'create');
   return node;
@@ -78,7 +83,9 @@ export async function createBookmark(config: ConnectionConfig | null, parentId: 
     iconUrl,
     sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000,
     createdAt: now(),
-    updatedAt: now()
+    updatedAt: now(),
+    revision: 1,
+    updatedBy: config?.profileId ?? 'offline'
   };
   await persistNode(config, node, 'create');
   return node;
@@ -96,14 +103,16 @@ export async function createText(config: ConnectionConfig | null, parentId: stri
     content,
     sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000,
     createdAt: now(),
-    updatedAt: now()
+    updatedAt: now(),
+    revision: 1,
+    updatedBy: config?.profileId ?? 'offline'
   };
   await persistNode(config, node, 'create');
   return node;
 }
 
 export async function updateNode(config: ConnectionConfig | null, node: BookmarkNode, changes: Partial<BookmarkNode>): Promise<BookmarkNode> {
-  const next = { ...node, ...changes, updatedAt: now() };
+  const next = { ...node, ...changes, updatedAt: now(), revision: (node.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' };
   if (next.nodeType === 'text' && typeof next.content === 'string') {
     if (!next.content.trim()) throw new Error('文案内容不能为空。');
     next.title = getTextTitle(next.content);
@@ -134,7 +143,7 @@ export async function deleteSubtree(config: ConnectionConfig | null, nodeId: str
     }
   }
   await persistNodes(config, nodes.filter((item) => toDelete.has(item.id)).map((node) => ({
-    node: { ...node, deletedAt: now(), updatedAt: now() },
+    node: { ...node, deletedAt: now(), updatedAt: now(), revision: (node.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' },
     action: 'delete' as const
   })));
   return [...toDelete];
@@ -158,7 +167,7 @@ export async function moveNode(config: ConnectionConfig | null, draggedId: strin
   }
   if (target.nodeType === 'folder' && mode === 'inside') {
     const siblings = nodes.filter((node) => node.parentId === target.id && node.id !== dragged.id);
-    const next = { ...dragged, parentId: target.id, sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000, updatedAt: now() };
+    const next = { ...dragged, parentId: target.id, sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000, updatedAt: now(), revision: (dragged.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' };
     await persistNode(config, next, 'update');
     return [next];
   }
@@ -168,7 +177,7 @@ export async function moveNode(config: ConnectionConfig | null, draggedId: strin
   const insertAt = Math.max(0, targetIndex + (mode === 'after' ? 1 : 0));
   const reordered = [...siblings.slice(0, insertAt), dragged, ...siblings.slice(insertAt)];
   const updatedAt = now();
-  const updated = reordered.map((item, index) => ({ ...item, parentId, sortOrder: (index + 1) * 1000, updatedAt }));
+  const updated = reordered.map((item, index) => ({ ...item, parentId, sortOrder: (index + 1) * 1000, updatedAt, revision: (item.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' }));
   await persistNodes(config, updated.map((node) => ({
     node,
     action: 'update' as const
@@ -176,10 +185,34 @@ export async function moveNode(config: ConnectionConfig | null, draggedId: strin
   return updated;
 }
 
-export async function syncNow(config: ConnectionConfig): Promise<void> {
-  await syncProfile(config);
+export async function moveNodeUp(config: ConnectionConfig | null, nodeId: string): Promise<BookmarkNode[]> {
+  const nodes = await loadLocalNodes(config);
+  const node = nodes.find((item) => item.id === nodeId);
+  if (!node?.parentId) return [];
+  const parent = nodes.find((item) => item.id === node.parentId && item.nodeType === 'folder');
+  if (!parent) throw new Error('当前节点的父目录不存在，无法上移。');
+  const destinationParentId = parent.parentId;
+  const siblings = nodes.filter((item) => item.parentId === destinationParentId && item.id !== node.id).sort((left, right) => left.sortOrder - right.sortOrder);
+  const parentIndex = siblings.findIndex((item) => item.id === parent.id);
+  const insertAt = parentIndex < 0 ? siblings.length : parentIndex + 1;
+  const reordered = [...siblings.slice(0, insertAt), node, ...siblings.slice(insertAt)];
+  const updatedAt = now();
+  const updated = reordered.map((item, index) => ({
+    ...item,
+    parentId: destinationParentId,
+    sortOrder: (index + 1) * 1000,
+    updatedAt,
+    revision: (item.revision ?? 0) + 1,
+    updatedBy: config?.profileId ?? 'offline'
+  }));
+  await persistNodes(config, updated.map((item) => ({ node: item, action: 'update' as const })));
+  return updated;
+}
+
+export async function syncNow(config: ConnectionConfig, forceFull = false): Promise<void> {
+  await syncProfile(config, forceFull);
 }
 
 export function getDisplayName(node: BookmarkNode): string {
-  return node.nodeType === 'folder' ? (node.name ?? '未命名目录') : (node.title ?? node.url ?? '未命名收藏');
+  return getNodeTitle(node);
 }

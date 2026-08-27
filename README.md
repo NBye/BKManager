@@ -13,6 +13,8 @@ npm run build
 
 构建产物位于 `dist/`。
 
+发布前可运行 `powershell -ExecutionPolicy Bypass -File scripts/check-package.ps1`，检查 Manifest 入口、图标和敏感文件。ES 地址保存时仅申请对应主机权限；生产环境使用 HTTPS，HTTP 仅允许 localhost 开发地址。
+
 ## 加载到 Chrome
 
 1. 打开 `chrome://extensions/`。

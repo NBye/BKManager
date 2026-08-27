@@ -24,8 +24,6 @@ button { cursor: pointer; }
 .icon-button { position: relative; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; color: #202124; background: transparent; line-height: 30px; }
 .icon-button:hover { background: #f0f0f0; }
 .icon-button:disabled { cursor: wait; opacity: .55; }
-.icon-button.refreshing .header-icon { animation: refresh-spin .8s linear infinite; }
-@keyframes refresh-spin { to { transform: rotate(360deg); } }
 .header-icon { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
 .search-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .search-bar { display: flex; align-items: center; gap: 8px; margin: 12px 20px 2px; padding: 7px 10px; border: 1px solid #d7d7d7; border-radius: 8px; color: #666; }
@@ -104,7 +102,10 @@ button { cursor: pointer; }
 .bookmark-icon-preview img { width: 22px; height: 22px; object-fit: contain; }
 .bookmark-icon-fallback { color: #888; font-size: 10px; white-space: nowrap; }
 .node-context-menu { position: fixed; z-index: 50; display: flex; min-width: 76px; flex-direction: column; padding: 3px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff; box-shadow: 0 6px 18px rgb(0 0 0 / 18%); }
-.node-context-menu button { border: 0; border-radius: 4px; padding: 5px 10px; color: #202124; background: transparent; text-align: left; font-size: 12px; }
+.node-context-menu button { display: flex; align-items: center; gap: 7px; border: 0; border-radius: 4px; padding: 6px 9px; color: #202124; background: transparent; text-align: left; font-size: 12px; }
+.node-context-menu button svg { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.node-context-menu button:disabled { color: #b5b5b5; cursor: not-allowed; }
+.node-context-menu button:disabled:hover { color: #b5b5b5; background: transparent; }
 .node-context-menu button:hover { background: #ededed; color: #202124; }
 .capture-page { min-width: 420px; }
 

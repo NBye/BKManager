@@ -1,11 +1,13 @@
 import './styles.css';
-import { createBookmark, createFolder, deleteSubtree, DuplicateBookmarkError, loadNodes, moveNode, syncNow, updateNode } from './app';
-import { CONFIG_KEY, getConfig, getOfflineMode, isConfigComplete, normalizeConfig, saveConfig, setOfflineMode } from './config';
+import { createBookmark, createFolder, deleteSubtree, DuplicateBookmarkError, loadNodes, moveNode, moveNodeUp, syncNow, updateNode } from './app';
+import { CONFIG_KEY, getConfig, getOfflineMode, isConfigComplete, saveConfig, setOfflineMode } from './config';
+import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields } from './config-editor';
 import { testConnection } from './es';
 import { clearOfflineProfile, migrateOfflineProfile } from './sync';
 import { renderTree } from './tree';
-import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog } from './ui';
+import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog, showToast as showSharedToast } from './ui';
 import type { BookmarkNode, ConnectionConfig } from './types';
+import { copyNode } from './node-service';
 
 const tree = document.querySelector<HTMLElement>('#tree')!;
 const status = document.querySelector<HTMLElement>('#status')!;
@@ -23,7 +25,6 @@ const inlineJsonMode = document.querySelector<HTMLButtonElement>('#inline-json-m
 const inlineOffline = document.querySelector<HTMLButtonElement>('#inline-offline')!;
 const searchBar = document.querySelector<HTMLElement>('#search-bar')!;
 const searchInput = document.querySelector<HTMLInputElement>('#search-input')!;
-const refreshButton = document.querySelector<HTMLButtonElement>('#refresh')!;
 const layoutToggle = document.querySelector<HTMLButtonElement>('#layout-toggle')!;
 const layoutTreeIcon = document.querySelector<HTMLElement>('#layout-tree-icon')!;
 const layoutFlatIcon = document.querySelector<HTMLElement>('#layout-flat-icon')!;
@@ -37,7 +38,6 @@ let activeContextMenu: HTMLElement | null = null;
 let inlineConfigMode: 'form' | 'json' = 'form';
 let activeConfig: ConnectionConfig | null = null;
 let offlineMode = false;
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 function updateLayoutToggle(): void {
   const isTree = layout === 'tree';
@@ -54,32 +54,17 @@ function showStatus(message: string, error = false): void {
 }
 
 function showToast(message: string, error = false): void {
-  if (toastTimer) clearTimeout(toastTimer);
-  document.querySelector('.popup-toast')?.remove();
-  const toast = document.createElement('div');
-  toast.className = `popup-toast${error ? ' error' : ''}`;
-  toast.textContent = message;
-  document.body.append(toast);
-  toastTimer = setTimeout(() => {
-    toast.remove();
-    toastTimer = null;
-  }, 1800);
+  showSharedToast(message, error);
 }
 
 function readInlineConfig() {
-  if (inlineConfigMode === 'form') return normalizeConfig({ esUrl: inlineEsUrl.value, apiKey: inlineApiKey.value, indexPrefix: inlineIndexPrefix.value });
-  let parsed: unknown;
-  try { parsed = JSON.parse(inlineConfigJson.value); } catch { throw new Error('JSON 格式不正确，请检查逗号、引号和括号。'); }
-  if (!parsed || typeof parsed !== 'object') throw new Error('JSON 配置必须是对象。');
-  const value = parsed as Partial<{ esUrl: string; apiKey: string; indexPrefix: string }>;
-  if (typeof value.esUrl !== 'string' || typeof value.apiKey !== 'string' || typeof value.indexPrefix !== 'string') {
-    throw new Error('JSON 配置必须包含 esUrl、apiKey 和 indexPrefix 字符串字段。');
-  }
-  return normalizeConfig({ esUrl: value.esUrl, apiKey: value.apiKey, indexPrefix: value.indexPrefix });
+  return inlineConfigMode === 'form'
+    ? configFromFields({ esUrl: inlineEsUrl, apiKey: inlineApiKey, indexPrefix: inlineIndexPrefix })
+    : parseConfigJson(inlineConfigJson.value);
 }
 
 function writeInlineConfigJson(): void {
-  inlineConfigJson.value = JSON.stringify({ esUrl: inlineEsUrl.value, apiKey: inlineApiKey.value, indexPrefix: inlineIndexPrefix.value }, null, 2);
+  inlineConfigJson.value = serializeConfig(configFromFields({ esUrl: inlineEsUrl, apiKey: inlineApiKey, indexPrefix: inlineIndexPrefix }));
 }
 
 function syncInlineFormToJson(): void { writeInlineConfigJson(); }
@@ -111,16 +96,14 @@ function setConfiguredView(configured: boolean, config: ConnectionConfig | null 
   tree.classList.toggle('hidden', !configured);
   if (!configured) {
     searchBar.classList.add('hidden');
-    for (const id of ['add-current', 'add-folder', 'refresh', 'search-toggle', 'layout-toggle']) document.querySelector<HTMLElement>(`#${id}`)?.classList.add('hidden');
+    for (const id of ['add-current', 'add-folder', 'search-toggle', 'layout-toggle']) document.querySelector<HTMLElement>(`#${id}`)?.classList.add('hidden');
     if (config) {
-      inlineEsUrl.value = config.esUrl ?? '';
-      inlineApiKey.value = config.apiKey ?? '';
-      inlineIndexPrefix.value = config.indexPrefix ?? '';
+      writeConfigFields({ esUrl: inlineEsUrl, apiKey: inlineApiKey, indexPrefix: inlineIndexPrefix }, config);
       writeInlineConfigJson();
     }
     setTimeout(() => inlineEsUrl.focus(), 0);
   } else {
-    for (const id of ['add-current', 'add-folder', 'refresh', 'search-toggle', 'layout-toggle']) document.querySelector<HTMLElement>(`#${id}`)?.classList.remove('hidden');
+    for (const id of ['add-current', 'add-folder', 'search-toggle', 'layout-toggle']) document.querySelector<HTMLElement>(`#${id}`)?.classList.remove('hidden');
   }
 }
 
@@ -160,7 +143,7 @@ async function editNode(node: BookmarkNode): Promise<void> {
 
 async function copyTextNode(node: BookmarkNode): Promise<void> {
   try {
-    await navigator.clipboard.writeText(node.content ?? '');
+    await copyNode(node);
     showToast('文案已复制');
   } catch (error) {
     showToast(error instanceof Error ? error.message : '复制失败', true);
@@ -171,11 +154,33 @@ function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
   closeContextMenu();
   const menu = document.createElement('div');
   menu.className = 'node-context-menu';
-  const edit = document.createElement('button');
-  edit.textContent = '编辑';
+  const createAction = (label: string, path: string): HTMLButtonElement => {
+    const action = document.createElement('button');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
+    const iconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    iconPath.setAttribute('d', path);
+    icon.append(iconPath);
+    action.append(icon, document.createTextNode(label));
+    return action;
+  };
+  const edit = createAction('编辑', 'm4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Zm10.5-12.5 3 3');
   edit.addEventListener('click', () => { closeContextMenu(); void editNode(node).catch((error) => showStatus(error instanceof Error ? error.message : '编辑失败', true)); });
-  const remove = document.createElement('button');
-  remove.textContent = '删除';
+  const moveUp = createAction('上移', 'M12 19V5m0 0-5 5m5-5 5 5');
+  moveUp.disabled = !node.parentId;
+  moveUp.title = node.parentId ? '移入上一级目录' : '根目录节点不能上移';
+  moveUp.addEventListener('click', async () => {
+    closeContextMenu();
+    try {
+      const moved = await moveNodeUp(activeConfig, node.id);
+      if (!moved.length) return;
+      const movedById = new Map(moved.map((item) => [item.id, item]));
+      currentNodes = currentNodes.map((item) => movedById.get(item.id) ?? item);
+      renderCurrentTree();
+    } catch (error) { showStatus(error instanceof Error ? error.message : '上移失败', true); }
+  });
+  const remove = createAction('删除', 'M5 7h14m-9 4v6m4-6v6M9 7V5h6v2m-8 0 1 13h8l1-13');
   remove.addEventListener('click', async () => {
     closeContextMenu();
     if (!await showConfirmDialog('删除收藏', `确定删除“${node.name ?? node.title ?? node.url}”吗？`, '确认删除')) return;
@@ -188,11 +193,11 @@ function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
       renderCurrentTree();
     } catch (error) { showStatus(error instanceof Error ? error.message : '删除失败', true); }
   });
-  menu.append(edit, remove);
+  menu.append(edit, moveUp, remove);
   document.body.append(menu);
   const menuWidth = 92;
   menu.style.left = `${Math.min(event.clientX, Math.max(4, window.innerWidth - menuWidth))}px`;
-  menu.style.top = `${Math.min(event.clientY, Math.max(4, window.innerHeight - 76))}px`;
+  menu.style.top = `${Math.min(event.clientY, Math.max(4, window.innerHeight - 110))}px`;
   activeContextMenu = menu;
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
@@ -340,7 +345,11 @@ function renderFlat(): void {
     });
     card.addEventListener('dblclick', () => { if (node.nodeType === 'folder') { flatFolderId = node.id; renderCurrentTree(); } });
     card.addEventListener('keydown', (event) => {
-      if ((event.key === 'Enter' || event.key === ' ') && node.nodeType === 'folder') { event.preventDefault(); flatFolderId = node.id; renderCurrentTree(); }
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      if (node.nodeType === 'folder') { flatFolderId = node.id; renderCurrentTree(); }
+      else if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url });
+      else if (node.nodeType === 'text') void copyTextNode(node);
     });
     itemGrid.append(card);
   }
@@ -392,22 +401,6 @@ async function refresh(): Promise<void> {
   }
 }
 
-async function refreshAndSync(): Promise<void> {
-  if (refreshButton.disabled) return;
-  refreshButton.disabled = true;
-  refreshButton.classList.add('refreshing');
-  try {
-    if (activeConfig && !offlineMode) await syncNow(activeConfig);
-    await refresh();
-  } catch (error) {
-    await refresh().catch(() => undefined);
-    showStatus(error instanceof Error ? error.message : '刷新同步失败', true);
-  } finally {
-    refreshButton.disabled = false;
-    refreshButton.classList.remove('refreshing');
-  }
-}
-
 async function addBookmark(): Promise<void> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -444,7 +437,6 @@ async function addFolder(): Promise<void> {
 document.querySelector<HTMLButtonElement>('#settings')!.addEventListener('click', () => void chrome.runtime.openOptionsPage());
 document.querySelector<HTMLButtonElement>('#add-current')!.addEventListener('click', () => void addBookmark());
 document.querySelector<HTMLButtonElement>('#add-folder')!.addEventListener('click', () => void addFolder());
-refreshButton.addEventListener('click', () => void refreshAndSync());
 document.querySelector<HTMLButtonElement>('#search-toggle')!.addEventListener('click', () => {
   searchBar.classList.toggle('hidden');
   if (!searchBar.classList.contains('hidden')) { searchInput.focus(); searchInput.select(); }
@@ -471,11 +463,13 @@ inlineConfigForm.addEventListener('submit', async (event) => {
     const config = readInlineConfig();
     showStatus('正在验证并切换 ES 连接…');
     await testConnection(config);
-    const migratedOfflineData = await migrateOfflineProfile(config);
-    await syncNow(config);
-    activeConfig = config;
-    offlineMode = false;
     await saveConfig(config);
+    const savedConfig = await getConfig();
+    if (!savedConfig) throw new Error('配置保存失败。');
+    const migratedOfflineData = await migrateOfflineProfile(savedConfig);
+    await syncNow(savedConfig);
+    activeConfig = savedConfig;
+    offlineMode = false;
     if (migratedOfflineData) await clearOfflineProfile();
     await setOfflineMode(false);
     setConfiguredView(true);
@@ -493,17 +487,11 @@ inlineOffline.addEventListener('click', async () => {
 });
 
 async function refreshOnOpen(): Promise<void> {
-  if (activeConfig && !offlineMode) {
-    showStatus('正在同步收藏…');
-    try {
-      await syncNow(activeConfig);
-    } catch (error) {
-      await refresh();
-      showStatus(error instanceof Error ? `同步失败，已显示本地数据：${error.message}` : '同步失败，已显示本地数据', true);
-      return;
-    }
-  }
   await refresh();
+  if (activeConfig && !offlineMode) {
+    showToast('正在后台同步…');
+    void syncNow(activeConfig).then(() => refresh()).catch((error) => showToast(error instanceof Error ? `同步失败，已使用本地数据：${error.message}` : '同步失败，已使用本地数据', true));
+  }
 }
 
 void Promise.all([getConfig(), getOfflineMode()]).then(([config, savedOfflineMode]) => {

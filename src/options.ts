@@ -35,8 +35,10 @@ form.addEventListener('submit', async (event) => {
     const config = readConfig();
     showStatus('正在验证并切换 ES 连接…');
     await testConnection(config);
-    await syncNow(config);
     await saveConfig(config);
+    const savedConfig = await getConfig();
+    if (!savedConfig) throw new Error('配置保存失败。');
+    await syncNow(savedConfig);
     showStatus('配置已保存，连接测试成功');
     setTimeout(async () => {
       const tab = await chrome.tabs.getCurrent();

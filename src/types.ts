@@ -13,6 +13,8 @@ export interface BookmarkNode {
   sortOrder: number;
   createdAt?: number;
   updatedAt: number;
+  revision?: number;
+  updatedBy?: string;
   deletedAt?: number | null;
 }
 
@@ -20,6 +22,7 @@ export interface ConnectionConfig {
   esUrl: string;
   apiKey: string;
   indexPrefix: string;
+  profileId?: string;
 }
 
 export interface SyncOperation {
@@ -30,11 +33,15 @@ export interface SyncOperation {
   data: BookmarkNode;
   queuedAt: number;
   attempts: number;
+  lastAttemptAt?: number;
+  nextRetryAt?: number;
+  lastError?: string;
 }
 
 export interface SyncMeta {
   profileKey: string;
   lastSyncAt?: number;
+  lastFullSyncAt?: number;
   localDataUpdatedAt?: number;
   syncStatus?: 'idle' | 'syncing' | 'offline' | 'error';
   lastError?: string;
@@ -64,7 +71,8 @@ export function getIndexName(config: ConnectionConfig): string {
 }
 
 export function getProfileKey(config: ConnectionConfig): string {
-  return `${config.esUrl.trim()}|${getIndexName(config)}`;
+  const legacyKey = `${config.esUrl.trim()}|${getIndexName(config)}`;
+  return config.profileId ? `${legacyKey}|${config.profileId}` : legacyKey;
 }
 
 export function makeId(): string {

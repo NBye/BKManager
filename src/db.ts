@@ -1,7 +1,7 @@
 import type { BookmarkNode, SyncMeta, SyncOperation } from './types';
 
 const DB_NAME = 'bookmark-manager-local';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 interface StoredNode extends BookmarkNode {
   profileKey: string;
@@ -15,12 +15,18 @@ const openDb = (): Promise<IDBDatabase> => new Promise((resolve, reject) => {
   const request = indexedDB.open(DB_NAME, DB_VERSION);
   request.onupgradeneeded = () => {
     const database = request.result;
-    const nodes = database.createObjectStore('nodes', { keyPath: ['profileKey', 'id'] });
-    nodes.createIndex('profileKey', 'profileKey');
-    const operations = database.createObjectStore('operations', { keyPath: 'id' });
-    operations.createIndex('profileKey', 'profileKey');
-    operations.createIndex('profileAndQueuedAt', ['profileKey', 'queuedAt']);
-    database.createObjectStore('meta', { keyPath: 'profileKey' });
+    const nodes = database.objectStoreNames.contains('nodes')
+      ? request.transaction!.objectStore('nodes')
+      : database.createObjectStore('nodes', { keyPath: ['profileKey', 'id'] });
+    if (!nodes.indexNames.contains('profileKey')) nodes.createIndex('profileKey', 'profileKey');
+    if (!nodes.indexNames.contains('profileAndUpdatedAt')) nodes.createIndex('profileAndUpdatedAt', ['profileKey', 'updatedAt']);
+    const operations = database.objectStoreNames.contains('operations')
+      ? request.transaction!.objectStore('operations')
+      : database.createObjectStore('operations', { keyPath: 'id' });
+    if (!operations.indexNames.contains('profileKey')) operations.createIndex('profileKey', 'profileKey');
+    if (!operations.indexNames.contains('profileAndQueuedAt')) operations.createIndex('profileAndQueuedAt', ['profileKey', 'queuedAt']);
+    if (!operations.indexNames.contains('profileAndRetryAt')) operations.createIndex('profileAndRetryAt', ['profileKey', 'nextRetryAt']);
+    if (!database.objectStoreNames.contains('meta')) database.createObjectStore('meta', { keyPath: 'profileKey' });
   };
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error);
@@ -55,6 +61,44 @@ export async function putNodes(profileKey: string, nodes: BookmarkNode[]): Promi
 
 export async function putNode(profileKey: string, node: BookmarkNode): Promise<void> {
   return putNodes(profileKey, [node]);
+}
+
+export async function persistLocalChangesDb(
+  profileKey: string,
+  entries: Array<{ node: BookmarkNode; operation: SyncOperation }>,
+  meta: SyncMeta
+): Promise<void> {
+  const database = await openDb();
+  const transaction = database.transaction(['nodes', 'operations', 'meta'], 'readwrite');
+  const nodeStore = transaction.objectStore('nodes');
+  const operationStore = transaction.objectStore('operations');
+  const existingById = new Map<string, StoredOperation>();
+  const operationRequest = operationStore.index('profileKey').getAll(profileKey);
+  await new Promise<void>((resolve, reject) => {
+    operationRequest.onsuccess = () => {
+      for (const operation of operationRequest.result as StoredOperation[]) existingById.set(operation.nodeId, operation);
+      for (const entry of entries) {
+        nodeStore.put({ ...entry.node, profileKey } satisfies StoredNode);
+        const existing = existingById.get(entry.operation.nodeId);
+        const action = existing?.action === 'create' && entry.operation.action === 'update' ? 'create' : entry.operation.action;
+        operationStore.put({
+          ...entry.operation,
+          id: existing?.id ?? entry.operation.id,
+          action,
+          queuedAt: existing?.queuedAt ?? entry.operation.queuedAt,
+          attempts: 0,
+          lastAttemptAt: undefined,
+          nextRetryAt: undefined,
+          lastError: undefined
+        } satisfies StoredOperation);
+      }
+      transaction.objectStore('meta').put(meta);
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error ?? new Error('本地数据事务已回滚。'));
+  });
+  database.close();
 }
 
 export async function removeNodes(profileKey: string, nodeIds: string[]): Promise<void> {

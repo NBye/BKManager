@@ -10,7 +10,7 @@
     "128": "icon128.png"
   },
   "permissions": ["storage", "contextMenus", "activeTab", "alarms", "clipboardWrite"],
-  "host_permissions": ["http://*/*", "https://*/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

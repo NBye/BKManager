@@ -1,48 +1,57 @@
 import { CONFIG_KEY, getConfig, isConfigComplete } from './config';
 import { createText } from './app';
 import { getOperations } from './db';
+import { now } from './types';
 import { cancelScheduledSyncs, scheduleSync } from './sync';
 import { getProfileKey } from './types';
 
 const RETRY_ALARM = 'bookmark-sync-retry';
+const MAX_SYNC_ATTEMPTS = 8;
 
 function ensureRetryAlarm(): void {
   void chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 1 });
 }
 
 function createContextMenus(): void {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
+  const create = (properties: chrome.contextMenus.CreateProperties): void => {
+    chrome.contextMenus.create(properties, () => void chrome.runtime.lastError);
+  };
+  create({
       id: 'bookmark-page',
       title: '收藏到书签',
       contexts: ['page']
     });
-    chrome.contextMenus.create({
+    create({
       id: 'bookmark-link',
       title: '收藏链接到书签',
       contexts: ['link']
     });
-    chrome.contextMenus.create({
+    create({
       id: 'bookmark-text',
       title: '加入BKM收藏',
       contexts: ['selection']
     });
-    chrome.contextMenus.create({
+    create({
       id: 'open-manager',
       title: '打开收藏管理',
       contexts: ['action']
     });
-    chrome.contextMenus.create({
+    create({
       id: 'sync-now',
       title: '同步数据',
       contexts: ['action']
     });
-    chrome.contextMenus.create({
+    create({
       id: 'open-options',
       title: '插件设置',
       contexts: ['action']
     });
-  });
+}
+
+function showActionResult(message: string, error = false): void {
+  void chrome.action.setBadgeText({ text: error ? '!' : '✓' });
+  void chrome.action.setBadgeBackgroundColor({ color: error ? '#b42318' : '#16803c' });
+  void new Promise((resolve) => setTimeout(resolve, 2500)).then(() => chrome.action.setBadgeText({ text: '' }));
 }
 
 ensureRetryAlarm();
@@ -67,7 +76,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== RETRY_ALARM) return;
   void getConfig().then(async (config) => {
     if (!isConfigComplete(config)) return;
-    if ((await getOperations(getProfileKey(config))).length) scheduleSync(config);
+    const operations = await getOperations(getProfileKey(config));
+    if (operations.some((operation) => operation.attempts < MAX_SYNC_ATTEMPTS && (operation.nextRetryAt ?? 0) <= now())) scheduleSync(config);
   });
 });
 
@@ -77,7 +87,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (!content?.trim()) return;
     void getConfig()
       .then((storedConfig) => createText(isConfigComplete(storedConfig) ? storedConfig : null, null, content))
-      .catch(() => undefined);
+      .then(() => showActionResult('已加入 BKM 收藏'))
+      .catch((error) => showActionResult(error instanceof Error ? error.message : '加入收藏失败', true));
     return;
   }
   if (info.menuItemId === 'open-manager') {

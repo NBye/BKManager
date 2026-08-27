@@ -1,13 +1,16 @@
 import './styles.css';
-import { createFolder, deleteSubtree, loadNodes, moveNode, syncNow, updateNode } from './app';
-import { CONFIG_KEY, getConfig, isConfigComplete, normalizeConfig, saveConfig } from './config';
+import { createFolder, deleteSubtree, loadNodes, moveNode, persistNodes, syncNow, updateNode } from './app';
+import { CONFIG_KEY, getConfig, isConfigComplete, saveConfig } from './config';
+import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields } from './config-editor';
 import { getNodes } from './db';
-import { clearOfflineProfile, getStorageProfileKey, migrateOfflineProfile, saveLocalNode } from './sync';
+import { clearOfflineProfile, getStorageProfileKey, migrateOfflineProfile } from './sync';
 import type { BackupFile, BookmarkNode, ConnectionConfig } from './types';
 import { getIndexName, now } from './types';
-import { testConnection } from './es';
+import { fetchAllNodes, testConnection } from './es';
+import { parseBackup } from './nodes';
 import { renderTree } from './tree';
-import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog } from './ui';
+import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog, showToast } from './ui';
+import { copyNode, getNodeTitle } from './node-service';
 
 const tree = document.querySelector<HTMLElement>('#tree')!;
 const status = document.querySelector<HTMLElement>('#status')!;
@@ -39,30 +42,21 @@ function showSettingsStatus(message: string, error = false): void {
 }
 
 function configFromForm() {
-  return normalizeConfig({ esUrl: esUrl.value, apiKey: apiKey.value, indexPrefix: indexPrefix.value });
+  return configFromFields({ esUrl, apiKey, indexPrefix });
 }
 
 function writeConfigJson(): void {
-  configJson.value = JSON.stringify({ esUrl: esUrl.value, apiKey: apiKey.value, indexPrefix: indexPrefix.value }, null, 2);
+  configJson.value = serializeConfig(configFromForm());
 }
 
 function configFromJson() {
-  let parsed: unknown;
-  try { parsed = JSON.parse(configJson.value); } catch { throw new Error('JSON 格式不正确，请检查逗号、引号和括号。'); }
-  if (!parsed || typeof parsed !== 'object') throw new Error('JSON 配置必须是对象。');
-  const value = parsed as Partial<{ esUrl: string; apiKey: string; indexPrefix: string }>;
-  if (typeof value.esUrl !== 'string' || typeof value.apiKey !== 'string' || typeof value.indexPrefix !== 'string') {
-    throw new Error('JSON 配置必须包含 esUrl、apiKey 和 indexPrefix 字符串字段。');
-  }
-  return normalizeConfig({ esUrl: value.esUrl, apiKey: value.apiKey, indexPrefix: value.indexPrefix });
+  return parseConfigJson(configJson.value);
 }
 
 function readSettingsConfig() { return settingsMode === 'json' ? configFromJson() : configFromForm(); }
 
 function fillSettings(config: Awaited<ReturnType<typeof getConfig>>): void {
-  esUrl.value = config?.esUrl ?? '';
-  apiKey.value = config?.apiKey ?? '';
-  indexPrefix.value = config?.indexPrefix ?? '';
+  writeConfigFields({ esUrl, apiKey, indexPrefix }, config);
   writeConfigJson();
   sidebarProfile.textContent = config ? getIndexName(config) : '未配置';
 }
@@ -138,11 +132,11 @@ async function refreshView(config: ConnectionConfig | null): Promise<void> {
     },
     onOpen: (node) => {
       if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url });
-      if (node.nodeType === 'text') void navigator.clipboard.writeText(node.content ?? '').then(() => showStatus('文案已复制')).catch((error) => showStatus(error instanceof Error ? error.message : '复制失败', true));
+      if (node.nodeType === 'text') void copyNode(node).then(() => showToast('文案已复制')).catch((error) => showToast(error instanceof Error ? error.message : '复制失败', true));
     },
     onEdit: async (node) => { await editNode(config, node); },
     onDelete: async (node) => {
-      if (!await showConfirmDialog('删除收藏', `确定级联删除“${node.name ?? node.title ?? node.url}”吗？`, '确认删除')) return;
+      if (!await showConfirmDialog('删除收藏', `确定级联删除“${getNodeTitle(node)}”吗？`, '确认删除')) return;
       const deletedIds = await deleteSubtree(config, node.id);
       const deleted = new Set(deletedIds);
       currentNodes = currentNodes.filter((item) => !deleted.has(item.id));
@@ -194,9 +188,10 @@ async function exportBackup(): Promise<void> {
 
 async function importBackup(file: File): Promise<void> {
   const config = await getActiveConfig();
-  const parsed = JSON.parse(await file.text()) as Partial<BackupFile>;
-  if (parsed.format !== 'bookmark-manager-backup' || parsed.version !== 1 || !Array.isArray(parsed.nodes)) throw new Error('备份文件格式不正确。');
-  const backupNodes = parsed.nodes as BookmarkNode[];
+  const parsedValue: unknown = JSON.parse(await file.text());
+  const parsed = parseBackup(parsedValue);
+  if (parsed.errors.length) throw new Error(`备份校验失败：${parsed.errors.slice(0, 3).join('；')}`);
+  const backupNodes = parsed.nodes;
   const urls = new Set<string>();
   for (const node of backupNodes) {
     if (node.nodeType === 'bookmark') {
@@ -208,12 +203,17 @@ async function importBackup(file: File): Promise<void> {
     }
   }
   const profileKey = getStorageProfileKey(config);
+  if (config) await syncNow(config);
   const current = await getNodes(profileKey);
+  const remote = config ? await fetchAllNodes(config) : [];
   const overwrite = await showConfirmDialog('恢复收藏备份', '确定使用备份覆盖本地和 ES 当前数据吗？取消后将进入合并模式。', '全量覆盖');
   const selected = new Map<string, BookmarkNode>();
   if (overwrite) {
-    for (const node of current) await saveLocalNode(config, { ...node, deletedAt: now(), updatedAt: now() }, 'delete');
-    for (const node of backupNodes) await saveLocalNode(config, { ...node, deletedAt: null, updatedAt: now() }, 'create');
+    const allCurrent = new Map([...current, ...remote].map((node) => [node.id, node]));
+    await persistNodes(config, [
+      ...[...allCurrent.values()].map((node) => ({ node: { ...node, deletedAt: now(), updatedAt: now() }, action: 'delete' as const })),
+      ...backupNodes.map((node) => ({ node: { ...node, deletedAt: null, updatedAt: now() }, action: 'create' as const }))
+    ]);
   } else {
     for (const node of current) selected.set(node.nodeType === 'bookmark' ? `bookmark:${node.urlKey ?? node.url}` : `${node.nodeType}:${node.id}`, node);
     for (const node of backupNodes) {
@@ -223,7 +223,7 @@ async function importBackup(file: File): Promise<void> {
       if (existing && node.nodeType !== 'bookmark' && existing.updatedAt > node.updatedAt) continue;
       selected.set(key, { ...node, updatedAt: now(), deletedAt: null });
     }
-    for (const node of selected.values()) await saveLocalNode(config, node, 'update');
+    await persistNodes(config, [...selected.values()].map((node) => ({ node, action: 'update' as const })));
   }
   if (config) await syncNow(config);
   await refresh();
@@ -232,7 +232,7 @@ async function importBackup(file: File): Promise<void> {
 
 document.querySelector<HTMLButtonElement>('#nav-manager')!.addEventListener('click', () => showView('manager'));
 document.querySelector<HTMLButtonElement>('#nav-settings')!.addEventListener('click', () => showView('settings'));
-document.querySelector<HTMLButtonElement>('#sync')!.addEventListener('click', async () => { try { const config = await getActiveConfig(); if (!config) { showStatus('当前为离线模式，配置 ES 后才能同步'); return; } showStatus('同步中…'); await syncNow(config); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '同步失败', true); } });
+document.querySelector<HTMLButtonElement>('#sync')!.addEventListener('click', async () => { try { const config = await getActiveConfig(); if (!config) { showStatus('当前为离线模式，配置 ES 后才能同步'); return; } showStatus('全量校准同步中…'); await syncNow(config, true); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '同步失败', true); } });
 document.querySelector<HTMLButtonElement>('#add-folder')!.addEventListener('click', async () => {
   const config = await getActiveConfig();
   const node = await createFolder(config, null, '未命名');
@@ -259,11 +259,13 @@ settingsForm.addEventListener('submit', async (event) => {
     const config = readSettingsConfig();
     showSettingsStatus('正在验证并切换 ES 连接…');
     await testConnection(config);
-    const migratedOfflineData = await migrateOfflineProfile(config);
-    await syncNow(config);
     await saveConfig(config);
+    const savedConfig = await getConfig();
+    if (!savedConfig) throw new Error('配置保存失败。');
+    const migratedOfflineData = await migrateOfflineProfile(savedConfig);
+    await syncNow(savedConfig);
     if (migratedOfflineData) await clearOfflineProfile();
-    fillSettings(config);
+    fillSettings(savedConfig);
     showSettingsStatus('配置已保存，连接测试成功');
     showView('manager');
     await refresh();

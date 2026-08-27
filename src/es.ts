@@ -1,5 +1,9 @@
 import type { BookmarkNode, ConnectionConfig } from './types';
+import { ensureEsPermission, validateConfig } from './config';
+import { parseNode } from './nodes';
 import { getIndexName } from './types';
+
+const REQUEST_TIMEOUT_MS = 15000;
 
 function endpoint(config: ConnectionConfig, suffix = ''): string {
   return `${config.esUrl.replace(/\/$/, '')}/${getIndexName(config)}${suffix}`;
@@ -13,7 +17,17 @@ function headers(config: ConnectionConfig): HeadersInit {
 }
 
 async function request<T>(config: ConnectionConfig, url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { ...headers(config), ...(init.headers ?? {}) } });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal: controller.signal, headers: { ...headers(config), ...(init.headers ?? {}) } });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw new Error('ES 请求超时，请检查网络或服务器状态。');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   const text = await response.text();
   let body: unknown = null;
   if (text) {
@@ -33,6 +47,7 @@ async function request<T>(config: ConnectionConfig, url: string, init: RequestIn
 }
 
 export async function ensureIndex(config: ConnectionConfig): Promise<boolean> {
+  validateConfig(config);
   try {
     await request(config, endpoint(config), { method: 'HEAD' });
     return false;
@@ -71,28 +86,43 @@ export async function ensureIndex(config: ConnectionConfig): Promise<boolean> {
 
 interface SearchResponse {
   hits?: {
-    hits?: Array<{ _source?: BookmarkNode; sort?: unknown[] }>;
+    hits?: Array<{ _source?: unknown; sort?: unknown[] }>;
   };
 }
 
 interface BulkResponse {
   errors?: boolean;
-  items?: Array<Record<string, { error?: { reason?: string } }>>;
+  items?: Array<Record<string, { _id?: string; status?: number; error?: { reason?: string } }>>;
 }
 
-function assertBulkSucceeded(result: BulkResponse): void {
-  if (!result.errors) return;
-  const failure = result.items?.flatMap((item) => Object.values(item)).find((item) => item.error)?.error;
-  throw new Error(`ES 批量操作失败：${failure?.reason ?? '部分文档写入失败'}`);
+export interface BulkResult {
+  succeededIds: string[];
+  failed: Array<{ id: string; status?: number; reason: string }>;
 }
 
-export async function fetchAllNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
+function getBulkResult(result: BulkResponse): BulkResult {
+  const succeededIds: string[] = [];
+  const failed: BulkResult['failed'] = [];
+  for (const item of result.items ?? []) {
+    for (const [operation, detail] of Object.entries(item)) {
+      const id = detail._id ?? '';
+      if (detail.error) failed.push({ id, status: detail.status, reason: detail.error.reason ?? '部分文档写入失败' });
+      else if (id && operation !== 'delete') succeededIds.push(id);
+      else if (id) succeededIds.push(id);
+    }
+  }
+  if (result.errors && !failed.length) failed.push({ id: '', reason: '部分文档写入失败' });
+  return { succeededIds, failed };
+}
+
+export async function fetchNodesSince(config: ConnectionConfig, updatedAfter?: number): Promise<BookmarkNode[]> {
   const nodes: BookmarkNode[] = [];
+  const invalid: string[] = [];
   let searchAfter: unknown[] | undefined;
   while (true) {
     const body: Record<string, unknown> = {
       size: 500,
-      query: { match_all: {} },
+      query: updatedAfter === undefined ? { match_all: {} } : { range: { updatedAt: { gte: updatedAfter } } },
       sort: [{ updatedAt: 'asc' }, { id: 'asc' }]
     };
     if (searchAfter) body.search_after = searchAfter;
@@ -102,17 +132,26 @@ export async function fetchAllNodes(config: ConnectionConfig): Promise<BookmarkN
     });
     const hits = result.hits?.hits ?? [];
     for (const hit of hits) {
-      if (hit._source) nodes.push(hit._source);
+      if (hit._source) {
+        const parsed = parseNode(hit._source);
+        if (parsed.node) nodes.push(parsed.node);
+        else invalid.push(parsed.error ?? '节点格式无效');
+      }
     }
     if (hits.length < 500) break;
     searchAfter = hits[hits.length - 1].sort;
     if (!searchAfter) break;
   }
+  if (invalid.length) throw new Error(`ES 返回了 ${invalid.length} 个无效节点，已停止同步以保护数据：${invalid.slice(0, 2).join('；')}`);
   return nodes;
 }
 
-export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]): Promise<void> {
-  if (!nodes.length) return;
+export async function fetchAllNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
+  return fetchNodesSince(config);
+}
+
+export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]): Promise<BulkResult> {
+  if (!nodes.length) return { succeededIds: [], failed: [] };
   const lines: string[] = [];
   for (const node of nodes) {
     lines.push(JSON.stringify({ index: { _index: getIndexName(config), _id: node.id } }));
@@ -123,11 +162,11 @@ export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
   });
-  assertBulkSucceeded(result);
+  return getBulkResult(result);
 }
 
-export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promise<void> {
-  if (!ids.length) return;
+export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promise<BulkResult> {
+  if (!ids.length) return { succeededIds: [], failed: [] };
   const lines: string[] = [];
   for (const id of ids) lines.push(JSON.stringify({ delete: { _index: getIndexName(config), _id: id } }));
   const result = await request<BulkResponse>(config, `${config.esUrl.replace(/\/$/, '')}/_bulk`, {
@@ -135,10 +174,12 @@ export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promi
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
   });
-  assertBulkSucceeded(result);
+  return getBulkResult(result);
 }
 
 export async function testConnection(config: ConnectionConfig): Promise<void> {
+  validateConfig(config);
+  await ensureEsPermission(config);
   const created = await ensureIndex(config);
   if (created) await new Promise((resolve) => setTimeout(resolve, 1000));
   await request(config, endpoint(config, '/_search'), {

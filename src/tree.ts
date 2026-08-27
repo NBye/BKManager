@@ -1,5 +1,5 @@
 import type { BookmarkNode } from './types';
-import { getDisplayName } from './app';
+import { getNodeTitle, getNodeTooltip } from './node-service';
 
 export interface TreeOptions {
   showActions?: boolean;
@@ -137,8 +137,8 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
       } else {
         const label = document.createElement('button');
         label.className = 'tree-label';
-        label.textContent = getDisplayName(node);
-        label.title = node.content ?? node.url ?? getDisplayName(node);
+        label.textContent = getNodeTitle(node);
+        label.title = getNodeTooltip(node);
         label.addEventListener('click', () => {
           options.onSelect?.(node);
           if (node.nodeType !== 'folder') options.onOpen?.(node);

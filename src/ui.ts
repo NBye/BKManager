@@ -1,5 +1,20 @@
 import type { BookmarkNode } from './types';
 
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function showToast(message: string, error = false): void {
+  if (toastTimer) clearTimeout(toastTimer);
+  document.querySelector('.popup-toast')?.remove();
+  const toast = document.createElement('div');
+  toast.className = `popup-toast${error ? ' error' : ''}`;
+  toast.textContent = message;
+  document.body.append(toast);
+  toastTimer = setTimeout(() => {
+    toast.remove();
+    toastTimer = null;
+  }, 1800);
+}
+
 export interface BookmarkDialogData {
   url: string;
   title: string;
