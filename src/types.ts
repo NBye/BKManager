@@ -1,4 +1,4 @@
-export type NodeType = 'folder' | 'bookmark';
+export type NodeType = 'folder' | 'bookmark' | 'text';
 
 export interface BookmarkNode {
   id: string;
@@ -8,6 +8,7 @@ export interface BookmarkNode {
   url?: string;
   title?: string;
   iconUrl?: string;
+  content?: string;
   urlKey?: string;
   sortOrder: number;
   createdAt?: number;
@@ -47,6 +48,7 @@ export interface BackupFile {
 }
 
 export const ROOT_ID = null;
+export const OFFLINE_PROFILE_KEY = 'offline-local';
 
 export function now(): number {
   return Date.now();

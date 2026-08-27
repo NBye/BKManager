@@ -1,12 +1,15 @@
 import './styles.css';
-import { createBookmark, DuplicateBookmarkError, loadNodes, requireConfig, updateNode } from './app';
+import { createBookmark, DuplicateBookmarkError, loadNodes, updateNode } from './app';
+import { getConfig, getOfflineMode, isConfigComplete } from './config';
 import { showBookmarkDialog, showConfirmDialog } from './ui';
 
 const params = new URLSearchParams(location.search);
 const status = document.querySelector<HTMLElement>('#status')!;
 
 async function init(): Promise<void> {
-  const config = await requireConfig();
+  const [storedConfig, offlineMode] = await Promise.all([getConfig(), getOfflineMode()]);
+  const config = isConfigComplete(storedConfig) ? storedConfig : null;
+  if (!config && !offlineMode) throw new Error('请先配置 Elasticsearch，或在插件首页选择“离线使用”。');
   const nodes = await loadNodes(config);
   const result = await showBookmarkDialog(nodes, {
     url: params.get('url') ?? '',

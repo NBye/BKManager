@@ -156,6 +156,33 @@ export function showTextDialog(titleText: string, labelText: string, initialValu
   });
 }
 
+export function showTextContentDialog(titleText: string, initialValue: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const { panel } = createModal(titleText);
+    const form = document.createElement('form');
+    form.className = 'form modal-form';
+    const label = document.createElement('label');
+    label.textContent = '文案内容';
+    const input = document.createElement('textarea');
+    input.value = initialValue;
+    input.required = true;
+    input.rows = 8;
+    label.append(input);
+    const actions = document.createElement('div');
+    actions.className = 'form-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = '取消';
+    cancel.addEventListener('click', () => { closeModal(); resolve(null); });
+    const submit = document.createElement('button');
+    submit.type = 'submit'; submit.className = 'primary'; submit.textContent = '保存';
+    actions.append(cancel, submit);
+    form.append(label, actions);
+    form.addEventListener('submit', (event) => { event.preventDefault(); closeModal(); resolve(input.value); });
+    panel.append(form);
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  });
+}
+
 export function showConfirmDialog(titleText: string, message: string, confirmText = '确认'): Promise<boolean> {
   return new Promise((resolve) => {
     const { panel } = createModal(titleText);

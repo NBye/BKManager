@@ -1,5 +1,52 @@
 import { CONFIG_KEY, getConfig, isConfigComplete } from './config';
+import { createText } from './app';
+import { getOperations } from './db';
 import { cancelScheduledSyncs, scheduleSync } from './sync';
+import { getProfileKey } from './types';
+
+const RETRY_ALARM = 'bookmark-sync-retry';
+
+function ensureRetryAlarm(): void {
+  void chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 1 });
+}
+
+function createContextMenus(): void {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'bookmark-page',
+      title: '收藏到书签',
+      contexts: ['page']
+    });
+    chrome.contextMenus.create({
+      id: 'bookmark-link',
+      title: '收藏链接到书签',
+      contexts: ['link']
+    });
+    chrome.contextMenus.create({
+      id: 'bookmark-text',
+      title: '加入BKM收藏',
+      contexts: ['selection']
+    });
+    chrome.contextMenus.create({
+      id: 'open-manager',
+      title: '打开收藏管理',
+      contexts: ['action']
+    });
+    chrome.contextMenus.create({
+      id: 'sync-now',
+      title: '同步数据',
+      contexts: ['action']
+    });
+    chrome.contextMenus.create({
+      id: 'open-options',
+      title: '插件设置',
+      contexts: ['action']
+    });
+  });
+}
+
+ensureRetryAlarm();
+createContextMenus();
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && changes[CONFIG_KEY]) cancelScheduledSyncs();
@@ -11,34 +58,28 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'bookmark-page',
-    title: '收藏到书签',
-    contexts: ['page']
-  });
-  chrome.contextMenus.create({
-    id: 'bookmark-link',
-    title: '收藏链接到书签',
-    contexts: ['link']
-  });
-  chrome.contextMenus.create({
-    id: 'open-manager',
-    title: '打开收藏管理',
-    contexts: ['action']
-  });
-  chrome.contextMenus.create({
-    id: 'sync-now',
-    title: '同步数据',
-    contexts: ['action']
-  });
-  chrome.contextMenus.create({
-    id: 'open-options',
-    title: '插件设置',
-    contexts: ['action']
+  ensureRetryAlarm();
+});
+
+chrome.runtime.onStartup.addListener(ensureRetryAlarm);
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== RETRY_ALARM) return;
+  void getConfig().then(async (config) => {
+    if (!isConfigComplete(config)) return;
+    if ((await getOperations(getProfileKey(config))).length) scheduleSync(config);
   });
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'bookmark-text') {
+    const content = info.selectionText;
+    if (!content?.trim()) return;
+    void getConfig()
+      .then((storedConfig) => createText(isConfigComplete(storedConfig) ? storedConfig : null, null, content))
+      .catch(() => undefined);
+    return;
+  }
   if (info.menuItemId === 'open-manager') {
     void chrome.tabs.create({ url: chrome.runtime.getURL('src/manager.html') });
     return;

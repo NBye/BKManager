@@ -1,5 +1,36 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>收藏管理</title></head>
-  <body><main class="page"><div class="titlebar"><h1>收藏管理</h1><div class="toolbar"><button id="settings" class="secondary">设置</button><button id="sync" class="secondary">同步</button></div></div><div id="status" class="status"></div><div class="toolbar"><button id="add-folder" class="primary">新建根目录</button><button id="export" class="secondary">导出全部</button><button id="import" class="secondary">导入备份</button><input id="import-file" class="hidden" type="file" accept="application/json,.json" /></div><div id="tree" class="tree"></div></main><script type="module" src="./manager.ts"></script></body>
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>ES Bookmark Manager</title></head>
+  <body>
+    <main class="workspace-shell">
+      <aside class="workspace-sidebar">
+        <div class="workspace-brand"><img src="../logo.svg" alt="" /><div><strong>ES Bookmark Manager</strong><span>书签管理 Elasticsearch Sync</span></div></div>
+        <nav class="workspace-nav" aria-label="功能导航">
+          <button id="nav-manager" class="workspace-nav-item active" type="button"><span>▦</span>收藏管理</button>
+          <button id="nav-settings" class="workspace-nav-item" type="button"><span>⚙</span>连接设置</button>
+        </nav>
+        <div class="workspace-sidebar-footer"><span>当前工作区</span><strong id="sidebar-profile">未配置</strong></div>
+      </aside>
+      <section class="workspace-content">
+        <section id="manager-view" class="workspace-view">
+          <div class="titlebar"><div><p class="eyebrow">COLLECTION</p><h1>收藏管理</h1></div><div class="toolbar"><button id="sync" class="secondary">同步</button></div></div>
+          <div id="status" class="status"></div>
+          <div class="toolbar"><button id="add-folder" class="primary">新建根目录</button><button id="export" class="secondary">导出全部</button><button id="import" class="secondary">导入备份</button><input id="import-file" class="hidden" type="file" accept="application/json,.json" /></div>
+          <div id="tree" class="tree"></div>
+        </section>
+        <section id="settings-view" class="workspace-view hidden">
+          <div class="titlebar"><div><p class="eyebrow">CONNECTION</p><h1>连接设置</h1></div></div>
+          <div id="settings-status" class="status"></div>
+          <div class="settings-mode-tabs" role="tablist" aria-label="设置编辑模式"><button id="form-mode" class="secondary active" type="button">表单模式</button><button id="json-mode" class="secondary" type="button">JSON 模式</button></div>
+          <form id="form" class="form card settings-card">
+            <div id="form-fields" class="settings-fields"><label>ES 地址<input id="es-url" type="url" placeholder="https://es.example.com" required /></label><label>授权 Key<input id="api-key" type="password" required /></label><label>索引前缀<input id="index-prefix" placeholder="bm_company_" required /></label></div>
+            <label id="json-field" class="json-field hidden">连接配置 JSON<textarea id="config-json" spellcheck="false" placeholder="{&#10;  &quot;esUrl&quot;: &quot;https://es.example.com&quot;,&#10;  &quot;apiKey&quot;: &quot;your-api-key&quot;,&#10;  &quot;indexPrefix&quot;: &quot;bm_company_&quot;&#10;}"></textarea></label>
+            <p class="muted">实际索引名为“索引前缀 + bookmarks”。例如 bm_company_bookmarks。JSON 模式便于复制和粘贴完整配置。</p>
+            <div class="form-actions"><button id="test" type="button" class="secondary">测试连接</button><button type="submit" class="primary">保存配置</button></div>
+          </form>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="./manager.ts"></script>
+  </body>
 </html>

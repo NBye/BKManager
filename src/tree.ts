@@ -113,7 +113,7 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
         image.onerror = () => { image.replaceWith(document.createTextNode('🔗')); };
         icon.append(image);
       } else {
-        icon.textContent = node.nodeType === 'folder' ? '📁' : '🔗';
+        icon.textContent = node.nodeType === 'folder' ? '📁' : node.nodeType === 'text' ? '📝' : '🔗';
       }
       row.append(icon);
 
@@ -138,10 +138,10 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
         const label = document.createElement('button');
         label.className = 'tree-label';
         label.textContent = getDisplayName(node);
-        label.title = node.url ?? getDisplayName(node);
+        label.title = node.content ?? node.url ?? getDisplayName(node);
         label.addEventListener('click', () => {
           options.onSelect?.(node);
-          if (node.nodeType === 'bookmark') options.onOpen?.(node);
+          if (node.nodeType !== 'folder') options.onOpen?.(node);
         });
         row.append(label);
       }

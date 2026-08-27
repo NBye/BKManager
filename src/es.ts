@@ -52,6 +52,7 @@ export async function ensureIndex(config: ConnectionConfig): Promise<boolean> {
             url: { type: 'keyword' },
             title: { type: 'text', fields: { keyword: { type: 'keyword' } } },
             iconUrl: { type: 'keyword' },
+            content: { type: 'text' },
             urlKey: { type: 'keyword' },
             sortOrder: { type: 'integer' },
             createdAt: { type: 'date' },

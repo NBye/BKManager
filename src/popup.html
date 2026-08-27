@@ -8,7 +8,9 @@
         <div class="header-actions">
           <button id="add-current" class="icon-button" aria-label="收藏当前地址" title="收藏当前地址"><svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.4 6 .9-4.3 4.2 1 5.9-5.4-2.8-5.4 2.8 1-5.9-4.3-4.2 6-.9L12 3Z"/><circle cx="18" cy="18" r="4"/><path d="M18 16v4M16 18h4"/></svg></button>
           <button id="add-folder" class="icon-button" aria-label="在选中文件夹下创建子文件夹" title="创建子文件夹"><svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/><path d="M16 11v6M13 14h6"/></svg></button>
+          <button id="refresh" class="icon-button" aria-label="刷新并同步收藏" title="刷新并同步收藏"><svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.8-3.8L3 10"/><path d="M3 5.5V10h4.5"/><path d="M4 13a8 8 0 0 0 14.8 3.8L21 14"/><path d="M21 18.5V14h-4.5"/></svg></button>
           <button id="search-toggle" class="icon-button" aria-label="搜索文件夹和收藏连接" title="搜索"><svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 5 5"/></svg></button>
+          <button id="layout-toggle" class="icon-button" aria-label="切换布局" title="切换到平铺布局"><svg id="layout-tree-icon" class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5v14M5 8h6M5 16h6M11 8v8M11 8h7M11 16h7"/><circle cx="19" cy="8" r="1"/><circle cx="19" cy="16" r="1"/></svg><svg id="layout-flat-icon" class="header-icon hidden" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg></button>
           <button id="settings" class="icon-button" aria-label="进入设置页面" title="设置"><svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.7 3.4h4.6l.6 2a7.7 7.7 0 0 1 1.5.9l1.9-.8 2.3 4-1.6 1.4a7.4 7.4 0 0 1 0 1.8l1.6 1.4-2.3 4-1.9-.8a7.7 7.7 0 0 1-1.5.9l-.6 2H9.7l-.6-2a7.7 7.7 0 0 1-1.5-.9l-1.9.8-2.3-4L5 12.7a7.4 7.4 0 0 1 0-1.8L3.4 9.5l2.3-4 1.9.8 1.5-.9.6-2Z"/><circle cx="12" cy="11.8" r="2.7"/></svg></button>
         </div>
       </header>
@@ -17,15 +19,18 @@
       <section id="config-panel" class="popup-config hidden">
         <h2>配置 Elasticsearch</h2>
         <p>首次使用前，请绑定 ES 连接信息。</p>
+        <div class="settings-mode-tabs popup-mode-tabs" role="tablist" aria-label="连接配置模式"><button id="inline-form-mode" class="secondary active" type="button">表单模式</button><button id="inline-json-mode" class="secondary" type="button">JSON 模式</button></div>
         <form id="inline-config-form" class="form">
-          <label>ES 地址<input id="inline-es-url" type="url" placeholder="https://es.example.com" required /></label>
+          <div id="inline-form-fields"><label>ES 地址<input id="inline-es-url" type="url" placeholder="https://es.example.com" required /></label>
           <label>授权 Key<input id="inline-api-key" type="password" required /></label>
-          <label>索引前缀<input id="inline-index-prefix" placeholder="bookmark_company_" required /></label>
+          <label>索引前缀<input id="inline-index-prefix" placeholder="bookmark_company_" required /></label></div>
+          <label id="inline-json-field" class="json-field hidden">连接配置 JSON<textarea id="inline-config-json" spellcheck="false" placeholder="{&#10;  &quot;esUrl&quot;: &quot;https://es.example.com&quot;,&#10;  &quot;apiKey&quot;: &quot;your-api-key&quot;,&#10;  &quot;indexPrefix&quot;: &quot;bookmark_company_&quot;&#10;}"></textarea></label>
           <label>
             <p>允许系统可自动创建索引的前缀, company_ 实际创建的索引: company_bookmarks。</p>
             </label>
           <div class="form-actions">
             <button id="inline-config-test" type="button" class="secondary">测试连接</button>
+            <button id="inline-offline" type="button" class="secondary">离线使用</button>
             <button type="submit" class="primary">保存并连接</button>
           </div>
         </form>

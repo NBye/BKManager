@@ -1,7 +1,7 @@
 import { getConfig, isConfigComplete } from './config';
 import { getNodes } from './db';
-import { isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
-import { initializeProfile, requestSync, saveLocalNode, syncProfile } from './sync';
+import { getTextTitle, isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
+import { getStorageProfileKey, initializeProfile, requestSync, saveLocalNode, syncProfile } from './sync';
 import type { BookmarkNode, ConnectionConfig, NodeType } from './types';
 import { getProfileKey, makeId, normalizeUrl, now } from './types';
 
@@ -20,26 +20,32 @@ export async function requireConfig(): Promise<ConnectionConfig> {
   return config;
 }
 
-export async function loadNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
-  await initializeProfile(config);
-  const nodes = await getNodes(getProfileKey(config));
+export async function loadNodes(config: ConnectionConfig | null): Promise<BookmarkNode[]> {
+  const profileKey = getStorageProfileKey(config);
+  if (config) {
+    try {
+      await initializeProfile(config);
+    } catch {
+    }
+  }
+  const nodes = await getNodes(profileKey);
   return sanitizeNodes(nodes);
 }
 
-async function loadLocalNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
-  return sanitizeNodes(await getNodes(getProfileKey(config)));
+async function loadLocalNodes(config: ConnectionConfig | null): Promise<BookmarkNode[]> {
+  return sanitizeNodes(await getNodes(getStorageProfileKey(config)));
 }
 
-export async function persistNode(config: ConnectionConfig, node: BookmarkNode, action: 'create' | 'update' | 'delete'): Promise<void> {
+export async function persistNode(config: ConnectionConfig | null, node: BookmarkNode, action: 'create' | 'update' | 'delete'): Promise<void> {
   await persistNodes(config, [{ node, action }]);
 }
 
-export async function persistNodes(config: ConnectionConfig, entries: Array<{ node: BookmarkNode; action: 'create' | 'update' | 'delete' }>): Promise<void> {
+export async function persistNodes(config: ConnectionConfig | null, entries: Array<{ node: BookmarkNode; action: 'create' | 'update' | 'delete' }>): Promise<void> {
   for (const entry of entries) await saveLocalNode(config, entry.node, entry.action);
   requestSync(config);
 }
 
-export async function createFolder(config: ConnectionConfig, parentId: string | null, name: string): Promise<BookmarkNode> {
+export async function createFolder(config: ConnectionConfig | null, parentId: string | null, name: string): Promise<BookmarkNode> {
   const nodes = await loadLocalNodes(config);
   const siblings = nodes.filter((node) => node.parentId === parentId);
   const node: BookmarkNode = {
@@ -55,7 +61,7 @@ export async function createFolder(config: ConnectionConfig, parentId: string | 
   return node;
 }
 
-export async function createBookmark(config: ConnectionConfig, parentId: string | null, url: string, title: string, iconUrl?: string): Promise<BookmarkNode> {
+export async function createBookmark(config: ConnectionConfig | null, parentId: string | null, url: string, title: string, iconUrl?: string): Promise<BookmarkNode> {
   const nodes = await loadLocalNodes(config);
   const normalizedUrl = normalizeUrl(url);
   if (!isSupportedBookmarkUrl(normalizedUrl)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
@@ -78,8 +84,30 @@ export async function createBookmark(config: ConnectionConfig, parentId: string 
   return node;
 }
 
-export async function updateNode(config: ConnectionConfig, node: BookmarkNode, changes: Partial<BookmarkNode>): Promise<BookmarkNode> {
+export async function createText(config: ConnectionConfig | null, parentId: string | null, content: string): Promise<BookmarkNode> {
+  if (!content.trim()) throw new Error('选中的文案不能为空。');
+  const nodes = await loadLocalNodes(config);
+  const siblings = nodes.filter((node) => node.parentId === parentId);
+  const node: BookmarkNode = {
+    id: makeId(),
+    nodeType: 'text',
+    parentId,
+    title: getTextTitle(content),
+    content,
+    sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000,
+    createdAt: now(),
+    updatedAt: now()
+  };
+  await persistNode(config, node, 'create');
+  return node;
+}
+
+export async function updateNode(config: ConnectionConfig | null, node: BookmarkNode, changes: Partial<BookmarkNode>): Promise<BookmarkNode> {
   const next = { ...node, ...changes, updatedAt: now() };
+  if (next.nodeType === 'text' && typeof next.content === 'string') {
+    if (!next.content.trim()) throw new Error('文案内容不能为空。');
+    next.title = getTextTitle(next.content);
+  }
   if (next.nodeType === 'bookmark' && next.url) {
     next.url = normalizeUrl(next.url);
     if (!isSupportedBookmarkUrl(next.url)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
@@ -92,7 +120,7 @@ export async function updateNode(config: ConnectionConfig, node: BookmarkNode, c
   return next;
 }
 
-export async function deleteSubtree(config: ConnectionConfig, nodeId: string): Promise<string[]> {
+export async function deleteSubtree(config: ConnectionConfig | null, nodeId: string): Promise<string[]> {
   const nodes = await loadLocalNodes(config);
   const toDelete = new Set<string>([nodeId]);
   let changed = true;
@@ -112,7 +140,7 @@ export async function deleteSubtree(config: ConnectionConfig, nodeId: string): P
   return [...toDelete];
 }
 
-export async function moveNode(config: ConnectionConfig, draggedId: string, targetId: string, mode: 'before' | 'after' | 'inside'): Promise<BookmarkNode[]> {
+export async function moveNode(config: ConnectionConfig | null, draggedId: string, targetId: string, mode: 'before' | 'after' | 'inside'): Promise<BookmarkNode[]> {
   const nodes = await loadLocalNodes(config);
   const dragged = nodes.find((node) => node.id === draggedId);
   const target = nodes.find((node) => node.id === targetId);

@@ -57,6 +57,16 @@ export async function putNode(profileKey: string, node: BookmarkNode): Promise<v
   return putNodes(profileKey, [node]);
 }
 
+export async function removeNodes(profileKey: string, nodeIds: string[]): Promise<void> {
+  if (!nodeIds.length) return;
+  const database = await openDb();
+  const transaction = database.transaction('nodes', 'readwrite');
+  const store = transaction.objectStore('nodes');
+  for (const nodeId of nodeIds) store.delete([profileKey, nodeId]);
+  await requestResult(transactionDone(transaction));
+  database.close();
+}
+
 export async function clearNodes(profileKey: string): Promise<void> {
   const database = await openDb();
   const transaction = database.transaction('nodes', 'readwrite');
@@ -97,6 +107,16 @@ export async function removeOperations(profileKey: string): Promise<void> {
   for (const key of keys) {
     store.delete(key);
   }
+  await requestResult(transactionDone(transaction));
+  database.close();
+}
+
+export async function removeOperationsByIds(operationIds: string[]): Promise<void> {
+  if (!operationIds.length) return;
+  const database = await openDb();
+  const transaction = database.transaction('operations', 'readwrite');
+  const store = transaction.objectStore('operations');
+  for (const operationId of operationIds) store.delete(operationId);
   await requestResult(transactionDone(transaction));
   database.close();
 }
