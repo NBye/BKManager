@@ -64,7 +64,7 @@ function createModal(title: string): { panel: HTMLElement; close: () => void } {
   const close = document.createElement('button');
   close.className = 'modal-close';
   close.setAttribute('aria-label', '关闭');
-  close.textContent = '×';
+  close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
   close.addEventListener('click', () => closeModal());
   header.append(heading, close);
   panel.append(header);
