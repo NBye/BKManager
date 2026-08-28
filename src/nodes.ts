@@ -37,7 +37,9 @@ export function parseNode(value: unknown): NodeValidationResult {
     node.url = normalizeUrl(node.url ?? '');
     node.urlKey = node.url;
   }
-  if (node.nodeType === 'text') node.title = getTextTitle(node.content ?? '');
+  if (node.nodeType === 'text' && (typeof node.title !== 'string' || !node.title.trim())) {
+    node.title = getTextTitle(node.content ?? '');
+  }
   return { node };
 }
 
@@ -78,6 +80,43 @@ export function validateNodeGraph(nodes: BookmarkNode[]): string[] {
   return errors;
 }
 
+export function findInvalidNodeIds(nodes: BookmarkNode[]): Set<string> {
+  const byId = new Map<string, BookmarkNode>();
+  for (const node of nodes) byId.set(node.id, node);
+  const invalid = new Set<string>();
+
+  for (const node of nodes) {
+    if (node.deletedAt) continue;
+    const path: string[] = [];
+    const visited = new Set<string>();
+    let current: BookmarkNode | undefined = node;
+    while (current && !current.deletedAt) {
+      if (visited.has(current.id)) {
+        const cycleStart = path.indexOf(current.id);
+        for (const id of path.slice(cycleStart < 0 ? 0 : cycleStart)) invalid.add(id);
+        break;
+      }
+      visited.add(current.id);
+      path.push(current.id);
+      if (current.parentId === null) break;
+      const parent = byId.get(current.parentId);
+      if (!parent || parent.deletedAt || parent.nodeType !== 'folder') {
+        for (const id of path) invalid.add(id);
+        break;
+      }
+      current = parent;
+    }
+    if (current?.deletedAt) {
+      for (const id of path) invalid.add(id);
+    }
+    if (current && invalid.has(current.id)) {
+      for (const id of path) invalid.add(id);
+    }
+  }
+
+  return invalid;
+}
+
 export function parseBackup(value: unknown): { nodes: BookmarkNode[]; errors: string[] } {
   if (!value || typeof value !== 'object') return { nodes: [], errors: ['备份内容必须是对象。'] };
   const backup = value as Record<string, unknown>;
@@ -103,7 +142,7 @@ export function sanitizeNodes(nodes: BookmarkNode[]): BookmarkNode[] {
     .map((node) => node.nodeType === 'bookmark'
       ? { ...node, url: normalizeUrl(node.url ?? ''), urlKey: normalizeUrl(node.url ?? '') }
       : node.nodeType === 'text'
-        ? { ...node, title: getTextTitle(node.content ?? '') }
+        ? { ...node, title: node.title?.trim() ? node.title : getTextTitle(node.content ?? '') }
       : node);
   const folders = normalized.filter((node) => node.nodeType === 'folder');
   const texts = normalized.filter((node) => node.nodeType === 'text');

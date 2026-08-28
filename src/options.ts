@@ -1,7 +1,7 @@
 import './styles.css';
-import { syncNow } from './app';
 import { getConfig, normalizeConfig, saveConfig } from './config';
 import { testConnection } from './es';
+import { bindProfile } from './sync';
 import type { ConnectionConfig } from './types';
 
 const form = document.querySelector<HTMLFormElement>('#form')!;
@@ -38,7 +38,7 @@ form.addEventListener('submit', async (event) => {
     await saveConfig(config);
     const savedConfig = await getConfig();
     if (!savedConfig) throw new Error('配置保存失败。');
-    await syncNow(savedConfig);
+    await bindProfile(savedConfig);
     showStatus('配置已保存，连接测试成功');
     setTimeout(async () => {
       const tab = await chrome.tabs.getCurrent();

@@ -24,16 +24,8 @@ function stateKey(container: HTMLElement): string {
 
 function loadCollapsed(container: HTMLElement, nodes: BookmarkNode[]): Set<string> {
   const stored = localStorage.getItem(stateKey(container));
-  if (stored !== null) {
-    try {
-      const ids = JSON.parse(stored) as unknown;
-      if (Array.isArray(ids)) return new Set(ids.filter((id): id is string => typeof id === 'string'));
-    } catch {
-      localStorage.removeItem(stateKey(container));
-    }
-  }
   const parentById = new Map(nodes.map((node) => [node.id, node.parentId]));
-  const collapsed = new Set<string>();
+  const nestedFolderIds = new Set<string>();
   for (const node of nodes) {
     if (node.nodeType !== 'folder') continue;
     let depth = 0;
@@ -44,13 +36,67 @@ function loadCollapsed(container: HTMLElement, nodes: BookmarkNode[]): Set<strin
       depth += 1;
       parentId = parentById.get(parentId) ?? null;
     }
-    if (depth > 0) collapsed.add(node.id);
+    if (depth > 0) nestedFolderIds.add(node.id);
   }
-  return collapsed;
+  if (stored !== null) {
+    try {
+      const parsed = JSON.parse(stored) as unknown;
+      if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === 'string'));
+      if (parsed && typeof parsed === 'object') {
+        const state = parsed as { collapsed?: unknown; expanded?: unknown };
+        const collapsed = new Set(typeof state.collapsed === 'object' && Array.isArray(state.collapsed)
+          ? state.collapsed.filter((id): id is string => typeof id === 'string')
+          : []);
+        const expanded = new Set(typeof state.expanded === 'object' && Array.isArray(state.expanded)
+          ? state.expanded.filter((id): id is string => typeof id === 'string')
+          : []);
+        for (const id of nestedFolderIds) {
+          if (!collapsed.has(id) && !expanded.has(id)) collapsed.add(id);
+        }
+        return collapsed;
+      }
+    } catch {
+      localStorage.removeItem(stateKey(container));
+    }
+  }
+  return nestedFolderIds;
 }
 
-function saveCollapsed(container: HTMLElement, collapsed: Set<string>): void {
-  localStorage.setItem(stateKey(container), JSON.stringify([...collapsed]));
+function saveCollapsed(container: HTMLElement, collapsed: Set<string>, nodes: BookmarkNode[]): void {
+  const expanded = new Set<string>();
+  const stored = localStorage.getItem(stateKey(container));
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored) as { expanded?: unknown };
+      if (Array.isArray(parsed.expanded)) {
+        for (const id of parsed.expanded) if (typeof id === 'string') expanded.add(id);
+      }
+    } catch {
+      expanded.clear();
+    }
+  }
+  for (const node of nodes) {
+    if (node.nodeType !== 'folder') continue;
+    if (collapsed.has(node.id)) expanded.delete(node.id);
+    else expanded.add(node.id);
+  }
+  localStorage.setItem(stateKey(container), JSON.stringify({ collapsed: [...collapsed], expanded: [...expanded] }));
+}
+
+function createActionIcon(label: string, path: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'tree-action-icon';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('aria-hidden', 'true');
+  const iconPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  iconPath.setAttribute('d', path);
+  icon.append(iconPath);
+  button.append(icon);
+  return button;
 }
 
 export function renderTree(container: HTMLElement, nodes: BookmarkNode[], options: TreeOptions = {}): void {
@@ -62,11 +108,32 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
     children.set(node.parentId, list);
   }
   for (const list of children.values()) list.sort((a, b) => a.sortOrder - b.sortOrder);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const structurallyReachable = new Set<string>();
+  const markReachable = (nodeId: string): void => {
+    if (structurallyReachable.has(nodeId)) return;
+    structurallyReachable.add(nodeId);
+    for (const child of children.get(nodeId) ?? []) markReachable(child.id);
+  };
+  for (const node of nodes) {
+    const parent = node.parentId ? nodeById.get(node.parentId) : undefined;
+    if (node.parentId === null || !parent || parent.nodeType !== 'folder') markReachable(node.id);
+  }
+  const disconnected = nodes.filter((node) => !structurallyReachable.has(node.id));
+  if (disconnected.length) {
+    const roots = children.get(null) ?? [];
+    roots.push(...disconnected);
+    roots.sort((a, b) => a.sortOrder - b.sortOrder);
+    children.set(null, roots);
+  }
   const collapsed = collapsedByContainer.get(container) ?? loadCollapsed(container, nodes);
   collapsedByContainer.set(container, collapsed);
+  const renderedIds = new Set<string>();
 
   const renderLevel = (parentId: string | null, parent: HTMLElement, depth: number): void => {
     for (const node of children.get(parentId) ?? []) {
+      if (renderedIds.has(node.id)) continue;
+      renderedIds.add(node.id);
       const row = document.createElement('div');
       row.className = 'tree-row';
       if (options.selectedId === node.id) row.classList.add('selected');
@@ -99,7 +166,7 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
       toggle.addEventListener('click', () => {
         if (node.nodeType !== 'folder') return;
         if (collapsed.has(node.id)) collapsed.delete(node.id); else collapsed.add(node.id);
-        saveCollapsed(container, collapsed);
+        saveCollapsed(container, collapsed, nodes);
         renderTree(container, nodes, options);
       });
       row.append(toggle);
@@ -157,19 +224,19 @@ export function renderTree(container: HTMLElement, nodes: BookmarkNode[], option
         const actions = document.createElement('span');
         actions.className = 'tree-actions';
         if (node.nodeType === 'folder' && options.onAddFolder) {
-          const addFolder = document.createElement('button');
-          addFolder.textContent = '子目录';
+          const addFolder = createActionIcon('创建子目录', 'M12 5v14M5 12h14');
           addFolder.addEventListener('click', () => options.onAddFolder?.(node));
           actions.append(addFolder);
         }
         if (options.showActions) {
-          const edit = document.createElement('button');
-          edit.textContent = '编辑';
+          const edit = createActionIcon('编辑', 'm4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Zm10.5-12.5 3 3');
           edit.addEventListener('click', () => options.onEdit?.(node));
-          const remove = document.createElement('button');
-          remove.textContent = '删除';
+          actions.append(edit);
+        }
+        if (options.showActions) {
+          const remove = createActionIcon('删除', 'M5 7h14m-9 4v6m4-6v6M9 7V5h6v2m-8 0 1 13h8l1-13');
           remove.addEventListener('click', () => options.onDelete?.(node));
-          actions.append(edit, remove);
+          actions.append(remove);
         }
         row.append(actions);
       }

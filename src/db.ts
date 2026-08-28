@@ -59,6 +59,33 @@ export async function putNodes(profileKey: string, nodes: BookmarkNode[]): Promi
   database.close();
 }
 
+export async function replaceNodes(profileKey: string, nodes: BookmarkNode[]): Promise<void> {
+  const database = await openDb();
+  const transaction = database.transaction('nodes', 'readwrite');
+  const store = transaction.objectStore('nodes');
+  const existingKeys = await requestResult<IDBValidKey[]>(store.index('profileKey').getAllKeys(profileKey));
+  for (const key of existingKeys) store.delete(key);
+  for (const node of nodes) store.put({ ...node, profileKey } satisfies StoredNode);
+  await requestResult(transactionDone(transaction));
+  database.close();
+}
+
+export async function replaceNodesAndRemoveOperations(profileKey: string, nodes: BookmarkNode[], operationIds?: string[]): Promise<void> {
+  const database = await openDb();
+  const transaction = database.transaction(['nodes', 'operations'], 'readwrite');
+  const nodeStore = transaction.objectStore('nodes');
+  const operationStore = transaction.objectStore('operations');
+  const nodeKeys = await requestResult<IDBValidKey[]>(nodeStore.index('profileKey').getAllKeys(profileKey));
+  const operationKeys = operationIds === undefined
+    ? await requestResult<IDBValidKey[]>(operationStore.index('profileKey').getAllKeys(profileKey))
+    : operationIds;
+  for (const key of nodeKeys) nodeStore.delete(key);
+  for (const key of operationKeys) operationStore.delete(key);
+  for (const node of nodes) nodeStore.put({ ...node, profileKey } satisfies StoredNode);
+  await requestResult(transactionDone(transaction));
+  database.close();
+}
+
 export async function putNode(profileKey: string, node: BookmarkNode): Promise<void> {
   return putNodes(profileKey, [node]);
 }
@@ -120,6 +147,19 @@ export async function clearNodes(profileKey: string): Promise<void> {
   for (const key of keys) {
     store.delete(key);
   }
+  await requestResult(transactionDone(transaction));
+  database.close();
+}
+
+export async function clearProfile(profileKey: string): Promise<void> {
+  const database = await openDb();
+  const transaction = database.transaction(['nodes', 'operations'], 'readwrite');
+  const nodeStore = transaction.objectStore('nodes');
+  const operationStore = transaction.objectStore('operations');
+  const nodeKeys = await requestResult<IDBValidKey[]>(nodeStore.index('profileKey').getAllKeys(profileKey));
+  const operationKeys = await requestResult<IDBValidKey[]>(operationStore.index('profileKey').getAllKeys(profileKey));
+  for (const key of nodeKeys) nodeStore.delete(key);
+  for (const key of operationKeys) operationStore.delete(key);
   await requestResult(transactionDone(transaction));
   database.close();
 }

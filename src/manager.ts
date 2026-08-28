@@ -1,9 +1,9 @@
 import './styles.css';
-import { createFolder, deleteSubtree, loadNodes, moveNode, persistNodes, syncNow, updateNode } from './app';
+import { createFolder, deleteSubtree, moveNode, persistNodes, syncNow, updateNode } from './app';
 import { CONFIG_KEY, getConfig, isConfigComplete, saveConfig } from './config';
 import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields } from './config-editor';
 import { getNodes } from './db';
-import { clearOfflineProfile, getStorageProfileKey, migrateOfflineProfile } from './sync';
+import { bindProfile, getStorageProfileKey } from './sync';
 import type { BackupFile, BookmarkNode, ConnectionConfig } from './types';
 import { getIndexName, now } from './types';
 import { fetchAllNodes, testConnection } from './es';
@@ -30,6 +30,7 @@ const jsonMode = document.querySelector<HTMLButtonElement>('#json-mode')!;
 let settingsMode: 'form' | 'json' = 'form';
 let inlineEditFolderId: string | null = null;
 let currentNodes: BookmarkNode[] = [];
+let visibleNodes: BookmarkNode[] = [];
 
 async function getActiveConfig(): Promise<ConnectionConfig | null> {
   const config = await getConfig();
@@ -96,10 +97,22 @@ function showStatus(message: string, error = false): void {
   status.classList.toggle('error', error);
 }
 
+async function loadManagementNodes(config: ConnectionConfig | null): Promise<BookmarkNode[]> {
+  return getNodes(getStorageProfileKey(config));
+}
+
 async function refresh(): Promise<void> {
   try {
     const config = await getActiveConfig();
-    currentNodes = await loadNodes(config);
+    currentNodes = await loadManagementNodes(config);
+    visibleNodes = currentNodes;
+    if (config) {
+      try {
+        const remoteNodes = await fetchAllNodes(config);
+        const localIds = new Set(currentNodes.map((node) => node.id));
+        visibleNodes = [...currentNodes, ...remoteNodes.filter((node) => !localIds.has(node.id))];
+      } catch { }
+    }
     await refreshView(config);
   } catch (error) {
     tree.innerHTML = '<div class="empty">请先配置 Elasticsearch 连接。</div>';
@@ -107,12 +120,31 @@ async function refresh(): Promise<void> {
   }
 }
 
+async function ensureNodesLocal(config: ConnectionConfig | null, node: BookmarkNode): Promise<BookmarkNode[]> {
+  if (!config) return [];
+  const localIds = new Set(currentNodes.map((item) => item.id));
+  const byId = new Map(visibleNodes.map((item) => [item.id, item]));
+  const missing: BookmarkNode[] = [];
+  const visited = new Set<string>();
+  let current: BookmarkNode | undefined = node;
+  while (current && !localIds.has(current.id) && !visited.has(current.id)) {
+    visited.add(current.id);
+    missing.unshift(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  if (!missing.length) return [];
+  await persistNodes(config, missing.map((item) => ({ node: item, action: 'create' as const })));
+  currentNodes = [...currentNodes, ...missing];
+  return missing;
+}
+
 async function refreshView(config: ConnectionConfig | null): Promise<void> {
-  renderTree(tree, currentNodes, {
+  renderTree(tree, visibleNodes, {
     showActions: true,
     showDate: true,
     inlineEditFolderId,
     onAddFolder: async (parent) => {
+      await ensureNodesLocal(config, parent);
       const node = await createFolder(config, parent.id, '未命名');
       currentNodes = [...currentNodes, node];
       inlineEditFolderId = node.id;
@@ -125,6 +157,10 @@ async function refreshView(config: ConnectionConfig | null): Promise<void> {
       await refreshView(config);
     },
     onMove: async (draggedId, targetId, mode) => {
+      const dragged = visibleNodes.find((item) => item.id === draggedId);
+      const target = visibleNodes.find((item) => item.id === targetId);
+      if (dragged) await ensureNodesLocal(config, dragged);
+      if (target) await ensureNodesLocal(config, target);
       const moved = await moveNode(config, draggedId, targetId, mode);
       const movedById = new Map(moved.map((item) => [item.id, item]));
       currentNodes = currentNodes.map((item) => movedById.get(item.id) ?? item);
@@ -134,16 +170,25 @@ async function refreshView(config: ConnectionConfig | null): Promise<void> {
       if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url });
       if (node.nodeType === 'text') void copyNode(node).then(() => showToast('文案已复制')).catch((error) => showToast(error instanceof Error ? error.message : '复制失败', true));
     },
-    onEdit: async (node) => { await editNode(config, node); },
+    onEdit: async (node) => { await ensureNodesLocal(config, node); await editNode(config, node); },
     onDelete: async (node) => {
       if (!await showConfirmDialog('删除收藏', `确定级联删除“${getNodeTitle(node)}”吗？`, '确认删除')) return;
-      const deletedIds = await deleteSubtree(config, node.id);
+      const deletedIds = await deleteSubtree(config, node.id, visibleNodes);
       const deleted = new Set(deletedIds);
       currentNodes = currentNodes.filter((item) => !deleted.has(item.id));
-      await refreshView(config);
+      visibleNodes = visibleNodes.filter((item) => !deleted.has(item.id));
+      if (config) {
+        await syncNow(config);
+        await refresh();
+      } else {
+        await refreshView(config);
+      }
     }
   });
-  showStatus(config ? `目录 ${currentNodes.filter((node) => node.nodeType === 'folder').length} 个，收藏 ${currentNodes.filter((node) => node.nodeType !== 'folder').length} 条` : `离线模式 · 目录 ${currentNodes.filter((node) => node.nodeType === 'folder').length} 个，收藏 ${currentNodes.filter((node) => node.nodeType !== 'folder').length} 条`);
+  const collectionSummary = config
+    ? `目录 ${currentNodes.filter((node) => node.nodeType === 'folder').length} 个，收藏 ${currentNodes.filter((node) => node.nodeType !== 'folder').length} 条`
+    : `离线模式 · 目录 ${currentNodes.filter((node) => node.nodeType === 'folder').length} 个，收藏 ${currentNodes.filter((node) => node.nodeType !== 'folder').length} 条`;
+  showStatus(collectionSummary);
 }
 
 async function editNode(config: ConnectionConfig | null, node: BookmarkNode): Promise<void> {
@@ -160,9 +205,9 @@ async function editNode(config: ConnectionConfig | null, node: BookmarkNode): Pr
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   } else {
-    const content = await showTextContentDialog('编辑文案', node.content ?? '');
-    if (content !== null) {
-      const updated = await updateNode(config, node, { content });
+    const result = await showTextContentDialog('编辑文案', { title: node.title ?? '', content: node.content ?? '' });
+    if (result !== null) {
+      const updated = await updateNode(config, node, { title: result.title, content: result.content });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   }
@@ -242,9 +287,11 @@ document.querySelector<HTMLButtonElement>('#add-folder')!.addEventListener('clic
 });
 document.querySelector<HTMLButtonElement>('#export')!.addEventListener('click', () => void exportBackup().catch((error) => showStatus(error instanceof Error ? error.message : '导出失败', true)));
 const importFile = document.querySelector<HTMLInputElement>('#import-file')!;
-document.querySelector<HTMLButtonElement>('#import')!.addEventListener('click', () => importFile.click());
-importFile.addEventListener('change', () => { const file = importFile.files?.[0]; if (file) void importBackup(file).catch((error) => showStatus(error instanceof Error ? error.message : '导入失败', true)); });
-
+document.querySelector<HTMLButtonElement>('#import')!.addEventListener('click', () => { importFile.value = ''; importFile.click(); });
+importFile.addEventListener('change', () => {
+  const file = importFile.files?.[0];
+  if (file) void importBackup(file).catch((error) => showStatus(error instanceof Error ? error.message : '导入失败', true));
+});
 formMode.addEventListener('click', () => setSettingsMode('form'));
 jsonMode.addEventListener('click', () => setSettingsMode('json'));
 for (const input of [esUrl, apiKey, indexPrefix]) input.addEventListener('input', syncFormToJson);
@@ -262,9 +309,7 @@ settingsForm.addEventListener('submit', async (event) => {
     await saveConfig(config);
     const savedConfig = await getConfig();
     if (!savedConfig) throw new Error('配置保存失败。');
-    const migratedOfflineData = await migrateOfflineProfile(savedConfig);
-    await syncNow(savedConfig);
-    if (migratedOfflineData) await clearOfflineProfile();
+    await bindProfile(savedConfig);
     fillSettings(savedConfig);
     showSettingsStatus('配置已保存，连接测试成功');
     showView('manager');
@@ -272,11 +317,23 @@ settingsForm.addEventListener('submit', async (event) => {
   } catch (error) { showSettingsStatus(error instanceof Error ? error.message : '保存失败', true); }
 });
 
-void getConfig().then((config) => {
+async function initializeManager(): Promise<void> {
+  const config = await getConfig();
   fillSettings(config);
   if (new URLSearchParams(location.search).get('view') === 'settings') showView('settings');
-  return refresh();
-});
+  await refresh();
+  const activeConfig = isConfigComplete(config) ? config : null;
+  if (!activeConfig) return;
+  showStatus('正在同步收藏…');
+  try {
+    await syncNow(activeConfig);
+    await refresh();
+  } catch (error) {
+    showStatus(error instanceof Error ? `同步失败，已使用本地数据：${error.message}` : '同步失败，已使用本地数据', true);
+  }
+}
+
+void initializeManager().catch((error) => showStatus(error instanceof Error ? error.message : '加载失败', true));
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local' || !changes[CONFIG_KEY]) return;
@@ -285,7 +342,3 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   void getConfig().then(fillSettings);
   void refresh();
 });
-
-if (new URLSearchParams(location.search).get('sync') === '1') {
-  void getActiveConfig().then((config) => { if (!config) throw new Error('请先配置 Elasticsearch 连接。'); return syncNow(config); }).then(refresh).catch((error) => showStatus(error instanceof Error ? error.message : '同步失败', true));
-}

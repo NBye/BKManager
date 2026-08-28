@@ -264,18 +264,24 @@ export function showTextDialog(titleText: string, labelText: string, initialValu
   });
 }
 
-export function showTextContentDialog(titleText: string, initialValue: string): Promise<string | null> {
+export function showTextContentDialog(titleText: string, initial: { title: string; content: string }): Promise<{ title: string; content: string } | null> {
   return new Promise((resolve) => {
     const { panel } = createModal(titleText);
     const form = document.createElement('form');
     form.className = 'form modal-form';
-    const label = document.createElement('label');
-    label.textContent = '文案内容';
-    const input = document.createElement('textarea');
-    input.value = initialValue;
-    input.required = true;
-    input.rows = 8;
-    label.append(input);
+    const titleLabel = document.createElement('label');
+    titleLabel.textContent = '标题';
+    const titleInput = document.createElement('input');
+    titleInput.value = initial.title;
+    titleInput.required = true;
+    titleLabel.append(titleInput);
+    const contentLabel = document.createElement('label');
+    contentLabel.textContent = '文案内容';
+    const contentInput = document.createElement('textarea');
+    contentInput.value = initial.content;
+    contentInput.required = true;
+    contentInput.rows = 8;
+    contentLabel.append(contentInput);
     const actions = document.createElement('div');
     actions.className = 'form-actions';
     const cancel = document.createElement('button');
@@ -284,10 +290,14 @@ export function showTextContentDialog(titleText: string, initialValue: string): 
     const submit = document.createElement('button');
     submit.type = 'submit'; submit.className = 'primary'; submit.textContent = '保存';
     actions.append(cancel, submit);
-    form.append(label, actions);
-    form.addEventListener('submit', (event) => { event.preventDefault(); closeModal(); resolve(input.value); });
+    form.append(titleLabel, contentLabel, actions);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      closeModal();
+      resolve({ title: titleInput.value.trim(), content: contentInput.value });
+    });
     panel.append(form);
-    setTimeout(() => { input.focus(); input.select(); }, 0);
+    setTimeout(() => { titleInput.focus(); titleInput.select(); }, 0);
   });
 }
 

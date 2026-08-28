@@ -100,30 +100,45 @@ export interface BulkResult {
   failed: Array<{ id: string; status?: number; reason: string }>;
 }
 
-function getBulkResult(result: BulkResponse): BulkResult {
+function getBulkResult(result: BulkResponse, expectedIds: string[] = []): BulkResult {
   const succeededIds: string[] = [];
   const failed: BulkResult['failed'] = [];
-  for (const item of result.items ?? []) {
-    for (const [operation, detail] of Object.entries(item)) {
-      const id = detail._id ?? '';
+  const items = result.items ?? [];
+  for (let index = 0; index < expectedIds.length; index += 1) {
+    const item = items[index];
+    const entries = item ? Object.entries(item) : [];
+    if (!entries.length) {
+      failed.push({ id: expectedIds[index], reason: 'ES 未返回该节点的写入结果' });
+      continue;
+    }
+    for (const [, detail] of entries) {
+      const id = detail._id ?? expectedIds[index];
       if (detail.error) failed.push({ id, status: detail.status, reason: detail.error.reason ?? '部分文档写入失败' });
-      else if (id && operation !== 'delete') succeededIds.push(id);
       else if (id) succeededIds.push(id);
+    }
+  }
+  if (!expectedIds.length) {
+    for (const item of items) {
+      for (const [operation, detail] of Object.entries(item)) {
+        const id = detail._id ?? '';
+        if (detail.error) failed.push({ id, status: detail.status, reason: detail.error.reason ?? '部分文档写入失败' });
+        else if (id && operation) succeededIds.push(id);
+      }
     }
   }
   if (result.errors && !failed.length) failed.push({ id: '', reason: '部分文档写入失败' });
   return { succeededIds, failed };
 }
 
-export async function fetchNodesSince(config: ConnectionConfig, updatedAfter?: number): Promise<BookmarkNode[]> {
+export async function fetchAllNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
   const nodes: BookmarkNode[] = [];
   const invalid: string[] = [];
   let searchAfter: unknown[] | undefined;
   while (true) {
     const body: Record<string, unknown> = {
       size: 500,
-      query: updatedAfter === undefined ? { match_all: {} } : { range: { updatedAt: { gte: updatedAfter } } },
-      sort: [{ updatedAt: 'asc' }, { id: 'asc' }]
+      query: { match_all: {} },
+      sort: [{ id: 'asc' }]
     };
     if (searchAfter) body.search_after = searchAfter;
     const result = await request<SearchResponse>(config, endpoint(config, '/_search'), {
@@ -146,10 +161,6 @@ export async function fetchNodesSince(config: ConnectionConfig, updatedAfter?: n
   return nodes;
 }
 
-export async function fetchAllNodes(config: ConnectionConfig): Promise<BookmarkNode[]> {
-  return fetchNodesSince(config);
-}
-
 export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]): Promise<BulkResult> {
   if (!nodes.length) return { succeededIds: [], failed: [] };
   const lines: string[] = [];
@@ -162,7 +173,7 @@ export async function bulkUpsert(config: ConnectionConfig, nodes: BookmarkNode[]
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
   });
-  return getBulkResult(result);
+  return getBulkResult(result, nodes.map((node) => node.id));
 }
 
 export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promise<BulkResult> {
@@ -174,7 +185,7 @@ export async function bulkDelete(config: ConnectionConfig, ids: string[]): Promi
     headers: { 'Content-Type': 'application/x-ndjson' },
     body: `${lines.join('\n')}\n`
   });
-  return getBulkResult(result);
+  return getBulkResult(result, ids);
 }
 
 export async function testConnection(config: ConnectionConfig): Promise<void> {

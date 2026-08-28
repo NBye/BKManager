@@ -3,7 +3,7 @@ import { createBookmark, createFolder, deleteSubtree, DuplicateBookmarkError, lo
 import { CONFIG_KEY, getConfig, getOfflineMode, isConfigComplete, saveConfig, setOfflineMode } from './config';
 import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields } from './config-editor';
 import { testConnection } from './es';
-import { clearOfflineProfile, migrateOfflineProfile } from './sync';
+import { bindProfile } from './sync';
 import { renderTree } from './tree';
 import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog, showToast as showSharedToast } from './ui';
 import type { BookmarkNode, ConnectionConfig } from './types';
@@ -132,9 +132,9 @@ async function editNode(node: BookmarkNode): Promise<void> {
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   } else {
-    const content = await showTextContentDialog('编辑文案', node.content ?? '');
-    if (content !== null) {
-      const updated = await updateNode(config, node, { content });
+    const result = await showTextContentDialog('编辑文案', { title: node.title ?? '', content: node.content ?? '' });
+    if (result !== null) {
+      const updated = await updateNode(config, node, { title: result.title, content: result.content });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   }
@@ -191,6 +191,9 @@ function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
       if (selectedFolderId && deleted.has(selectedFolderId)) selectedFolderId = null;
       if (flatFolderId && deleted.has(flatFolderId)) flatFolderId = null;
       renderCurrentTree();
+      if (activeConfig && !offlineMode) {
+        void syncNow(activeConfig).catch((error) => showToast(error instanceof Error ? `同步失败，已保留本地修改：${error.message}` : '同步失败，已保留本地修改', true));
+      }
     } catch (error) { showStatus(error instanceof Error ? error.message : '删除失败', true); }
   });
   menu.append(edit, moveUp, remove);
@@ -466,11 +469,9 @@ inlineConfigForm.addEventListener('submit', async (event) => {
     await saveConfig(config);
     const savedConfig = await getConfig();
     if (!savedConfig) throw new Error('配置保存失败。');
-    const migratedOfflineData = await migrateOfflineProfile(savedConfig);
-    await syncNow(savedConfig);
+    await bindProfile(savedConfig);
     activeConfig = savedConfig;
     offlineMode = false;
-    if (migratedOfflineData) await clearOfflineProfile();
     await setOfflineMode(false);
     setConfiguredView(true);
     showStatus('配置已保存，连接测试成功');

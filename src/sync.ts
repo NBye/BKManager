@@ -1,7 +1,7 @@
-import { bulkUpsert, ensureIndex, fetchAllNodes, fetchNodesSince } from './es';
-import { clearNodes, getMeta, getNodes, getOperations, persistLocalChangesDb, putMeta, putOperation, removeOperations, removeOperationsByIds, putNodes } from './db';
-import { validateNodeGraph } from './nodes';
+import { bulkDelete, bulkUpsert, ensureIndex, fetchAllNodes } from './es';
+import { clearProfile, getMeta, getNodes, getOperations, persistLocalChangesDb, putMeta, putOperation, replaceNodesAndRemoveOperations } from './db';
 import { ensureEsPermission } from './config';
+import { findInvalidNodeIds } from './nodes';
 import type { BookmarkNode, ConnectionConfig, SyncOperation } from './types';
 import { getProfileKey, now, OFFLINE_PROFILE_KEY } from './types';
 
@@ -14,23 +14,59 @@ function retryDelay(attempts: number): number {
   return Math.min(15 * 60 * 1000, 60 * 1000 * (2 ** Math.max(0, attempts - 1)));
 }
 
-function chooseNewer(left: BookmarkNode, right: BookmarkNode): BookmarkNode {
-  if (left.updatedAt !== right.updatedAt) return left.updatedAt > right.updatedAt ? left : right;
-  if ((left.revision ?? 0) !== (right.revision ?? 0)) return (left.revision ?? 0) > (right.revision ?? 0) ? left : right;
-  if ((left.updatedBy ?? '') !== (right.updatedBy ?? '')) return (left.updatedBy ?? '') > (right.updatedBy ?? '') ? left : right;
-  const leftSignature = JSON.stringify({ ...left, updatedAt: undefined });
-  const rightSignature = JSON.stringify({ ...right, updatedAt: undefined });
-  return leftSignature >= rightSignature ? left : right;
+async function recordSyncFailure(profileKey: string, error: unknown): Promise<string> {
+  const message = error instanceof Error ? error.message : '同步失败';
+  try {
+    const operations = await getOperations(profileKey);
+    const failedAt = now();
+    for (const operation of operations) {
+      const attempts = operation.attempts + 1;
+      await putOperation({
+        ...operation,
+        attempts,
+        lastAttemptAt: failedAt,
+        nextRetryAt: attempts >= MAX_SYNC_ATTEMPTS ? undefined : failedAt + retryDelay(attempts),
+        lastError: message
+      });
+    }
+    await setStatus(profileKey, 'error', message);
+  } catch {
+    await setStatus(profileKey, 'error', message);
+  }
+  return message;
 }
 
-function mergeNodes(localNodes: BookmarkNode[], remoteNodes: BookmarkNode[]): BookmarkNode[] {
-  const merged = new Map<string, BookmarkNode>();
-  for (const node of localNodes) merged.set(node.id, node);
-  for (const node of remoteNodes) {
-    const current = merged.get(node.id);
-    merged.set(node.id, current ? chooseNewer(current, node) : node);
+function getDeletedOrInvalidRemoteIds(nodes: BookmarkNode[]): Set<string> {
+  const deleteIds = findInvalidNodeIds(nodes);
+  for (const node of nodes) {
+    if (node.deletedAt) deleteIds.add(node.id);
   }
-  return [...merged.values()];
+  return deleteIds;
+}
+
+async function fetchAndRepairRemote(config: ConnectionConfig): Promise<BookmarkNode[]> {
+  const remoteNodes = await fetchAllNodes(config);
+  const deleteIds = getDeletedOrInvalidRemoteIds(remoteNodes);
+  if (deleteIds.size) {
+    const result = await bulkDelete(config, [...deleteIds]);
+    if (result.failed.length) {
+      throw new Error(`ES 异常节点清理失败：${result.failed.slice(0, 3).map((item) => `${item.id || '未知节点'}：${item.reason}`).join('；')}`);
+    }
+  }
+  return remoteNodes.filter((node) => !deleteIds.has(node.id));
+}
+
+function nodeSignature(node: BookmarkNode): string {
+  return JSON.stringify([
+    node.id, node.nodeType, node.parentId, node.name, node.url, node.urlKey, node.title,
+    node.iconUrl, node.content, node.sortOrder, node.createdAt, node.updatedAt,
+    node.revision, node.updatedBy, node.deletedAt ?? null
+  ]);
+}
+
+function mergeForGraphValidation(remoteNodes: BookmarkNode[], localNodes: BookmarkNode[]): BookmarkNode[] {
+  const remoteIds = new Set(remoteNodes.map((node) => node.id));
+  return [...remoteNodes, ...localNodes.filter((node) => !remoteIds.has(node.id))];
 }
 
 async function setStatus(profileKey: string, status: 'idle' | 'syncing' | 'offline' | 'error', error?: string) {
@@ -100,96 +136,119 @@ export function cancelScheduledSyncs(): void {
   pendingProfiles.clear();
 }
 
-export async function syncProfile(config: ConnectionConfig, forceFull = false): Promise<void> {
+export async function syncProfile(config: ConnectionConfig, _forceFull = false): Promise<void> {
   const profileKey = getProfileKey(config);
   await setStatus(profileKey, 'syncing');
   try {
     await ensureEsPermission(config);
     await ensureIndex(config);
-    const meta = await getMeta(profileKey);
     const localNodes = await getNodes(profileKey);
-    const operationsAtStart = await getOperations(profileKey);
-    const remoteNodes = forceFull || meta.lastSyncAt === undefined ? await fetchAllNodes(config) : await fetchNodesSince(config, meta.lastSyncAt);
-    const merged = mergeNodes(localNodes, remoteNodes);
-    if (forceFull || meta.lastSyncAt === undefined) {
-      const graphErrors = validateNodeGraph(merged.filter((node) => !node.deletedAt));
-      if (graphErrors.length) throw new Error(`ES 目录关系校验失败，已停止同步：${graphErrors.slice(0, 3).join('；')}`);
-    }
+    const operations = await getOperations(profileKey);
+    let remoteNodes = await fetchAndRepairRemote(config);
+    const remoteById = new Map(remoteNodes.map((node) => [node.id, node]));
     const localById = new Map(localNodes.map((node) => [node.id, node]));
-    const uploadById = new Map<string, BookmarkNode>();
-    for (const operation of operationsAtStart) {
-      const node = merged.find((item) => item.id === operation.nodeId);
-      if (node) uploadById.set(node.id, node);
-    }
-    for (const remote of remoteNodes) {
-      const local = localById.get(remote.id);
-      if (local && chooseNewer(local, remote) === local) uploadById.set(local.id, local);
-    }
-    const bulkResult = await bulkUpsert(config, [...uploadById.values()]);
-    const operationsAtEnd = await getOperations(profileKey);
-    const completedOperationIds = operationsAtStart
-      .filter((operation) => {
-        const current = operationsAtEnd.find((item) => item.id === operation.id);
-        return current && current.queuedAt === operation.queuedAt && current.data.updatedAt === operation.data.updatedAt && bulkResult.succeededIds.includes(operation.nodeId);
-      })
-      .map((operation) => operation.id);
-    await putNodes(profileKey, merged);
-    await removeOperationsByIds(completedOperationIds);
-    const remainingOperations = await getOperations(profileKey);
-    const syncAt = Math.max(now(), ...remoteNodes.map((node) => node.updatedAt));
-    await putMeta({ ...meta, profileKey, lastSyncAt: syncAt, lastFullSyncAt: forceFull || meta.lastFullSyncAt === undefined ? syncAt : meta.lastFullSyncAt, localDataUpdatedAt: now(), syncStatus: remainingOperations.length || bulkResult.failed.length ? 'error' : 'idle', lastError: bulkResult.failed.length ? `部分节点同步失败：${bulkResult.failed.length} 条` : undefined });
-    if (bulkResult.failed.length) throw new Error(`部分节点同步失败：${bulkResult.failed.slice(0, 3).map((item) => `${item.id || '未知节点'}：${item.reason}`).join('；')}`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '同步失败';
-    try {
-      const operations = await getOperations(profileKey);
-      const failedAt = now();
-      for (const operation of operations) {
-        const attempts = operation.attempts + 1;
-        await putOperation({
-          ...operation,
-          attempts,
-          lastAttemptAt: failedAt,
-          nextRetryAt: attempts >= MAX_SYNC_ATTEMPTS ? undefined : failedAt + retryDelay(attempts),
-          lastError: message
-        });
+    const invalidLocalIds = findInvalidNodeIds(mergeForGraphValidation(remoteNodes, localNodes));
+    const explicitDeleteIds = operations
+      .filter((operation) => operation.action === 'delete')
+      .map((operation) => operation.nodeId);
+    const deleteIds = new Set([
+      ...explicitDeleteIds.filter((id) => remoteById.has(id)),
+      ...[...invalidLocalIds].filter((id) => remoteById.has(id))
+    ]);
+    if (deleteIds.size) {
+      const result = await bulkDelete(config, [...deleteIds]);
+      if (result.failed.length) {
+        throw new Error(`删除 ES 节点失败：${result.failed.slice(0, 3).map((item) => `${item.id || '未知节点'}：${item.reason}`).join('；')}`);
       }
-      await setStatus(profileKey, 'error', message);
-    } catch {
-      await setStatus(profileKey, 'error', message);
     }
-    throw error;
+
+    const uploadById = new Map<string, BookmarkNode>();
+    const completedOperationIds: string[] = [];
+    for (const operation of operations) {
+      if (operation.action === 'delete') {
+        if (!remoteById.has(operation.nodeId)) completedOperationIds.push(operation.id);
+        continue;
+      }
+      const node = localById.get(operation.nodeId) ?? operation.data;
+      if (!node || node.deletedAt || invalidLocalIds.has(node.id)) {
+        completedOperationIds.push(operation.id);
+        continue;
+      }
+      const remote = remoteById.get(node.id);
+      if (remote && nodeSignature(remote) === nodeSignature(node)) {
+        completedOperationIds.push(operation.id);
+        continue;
+      }
+      uploadById.set(node.id, node);
+    }
+    if (uploadById.size) {
+      const result = await bulkUpsert(config, [...uploadById.values()]);
+      if (result.failed.length) {
+        throw new Error(`上传 ES 节点失败：${result.failed.slice(0, 3).map((item) => `${item.id || '未知节点'}：${item.reason}`).join('；')}`);
+      }
+    }
+
+    const nextRemoteById = new Map(remoteNodes.filter((node) => !deleteIds.has(node.id)).map((node) => [node.id, node]));
+    for (const node of uploadById.values()) nextRemoteById.set(node.id, node);
+    remoteNodes = [...nextRemoteById.values()];
+    await replaceNodesAndRemoveOperations(profileKey, remoteNodes, completedOperationIds);
+    const syncedAt = now();
+    await putMeta({
+      ...(await getMeta(profileKey)),
+      profileKey,
+      lastSyncAt: syncedAt,
+      lastFullSyncAt: syncedAt,
+      localDataUpdatedAt: syncedAt,
+      syncStatus: 'idle',
+      lastError: undefined
+    });
+  } catch (error) {
+    const message = await recordSyncFailure(profileKey, error);
+    throw new Error(message);
   }
 }
 
-export async function migrateOfflineProfile(config: ConnectionConfig): Promise<boolean> {
-  const offlineNodes = await getNodes(OFFLINE_PROFILE_KEY);
-  if (!offlineNodes.length) return false;
-  const targetProfileKey = getProfileKey(config);
-  const targetNodes = await getNodes(targetProfileKey);
-  const targetById = new Map(targetNodes.map((node) => [node.id, node]));
-  for (const node of offlineNodes) {
-    const existing = targetById.get(node.id);
-    if (existing && existing.updatedAt > node.updatedAt) continue;
-    await saveLocalNode(config, node, node.deletedAt ? 'delete' : 'create');
+export async function bindProfile(config: ConnectionConfig): Promise<void> {
+  const profileKey = getProfileKey(config);
+  await setStatus(profileKey, 'syncing');
+  try {
+    await ensureEsPermission(config);
+    await ensureIndex(config);
+    const offlineNodes = await getNodes(OFFLINE_PROFILE_KEY);
+    let remoteNodes = await fetchAndRepairRemote(config);
+    const remoteIds = new Set(remoteNodes.map((node) => node.id));
+    const invalidOfflineIds = findInvalidNodeIds(mergeForGraphValidation(remoteNodes, offlineNodes));
+    const offlineToUpload = offlineNodes.filter((node) => !node.deletedAt && !remoteIds.has(node.id) && !invalidOfflineIds.has(node.id));
+    if (offlineToUpload.length) {
+      const result = await bulkUpsert(config, offlineToUpload);
+      if (result.failed.length) {
+        throw new Error(`上传离线节点失败：${result.failed.slice(0, 3).map((item) => `${item.id || '未知节点'}：${item.reason}`).join('；')}`);
+      }
+    }
+    for (const node of offlineToUpload) remoteNodes = [...remoteNodes, node];
+    await replaceNodesAndRemoveOperations(profileKey, remoteNodes);
+    await clearOfflineProfile();
+    const syncedAt = now();
+    await putMeta({
+      ...(await getMeta(profileKey)),
+      profileKey,
+      lastSyncAt: syncedAt,
+      lastFullSyncAt: syncedAt,
+      localDataUpdatedAt: syncedAt,
+      syncStatus: 'idle',
+      lastError: undefined
+    });
+  } catch (error) {
+    const message = await recordSyncFailure(profileKey, error);
+    throw new Error(message);
   }
-  return true;
 }
 
 export async function clearOfflineProfile(): Promise<void> {
-  await clearNodes(OFFLINE_PROFILE_KEY);
-  await removeOperations(OFFLINE_PROFILE_KEY);
+  await clearProfile(OFFLINE_PROFILE_KEY);
 }
 
 export async function initializeProfile(config: ConnectionConfig): Promise<BookmarkNode[]> {
-  const profileKey = getProfileKey(config);
-  const localNodes = await getNodes(profileKey);
-  if (localNodes.length) return localNodes;
-  await ensureIndex(config);
-  const remoteNodes = await fetchAllNodes(config);
-  const graphErrors = validateNodeGraph(remoteNodes.filter((node) => !node.deletedAt));
-  if (graphErrors.length) throw new Error(`ES 目录关系校验失败，已停止初始化：${graphErrors.slice(0, 3).join('；')}`);
-  await putNodes(profileKey, remoteNodes);
-  await putMeta({ profileKey, lastSyncAt: now(), localDataUpdatedAt: now(), syncStatus: 'idle' });
-  return remoteNodes;
+  await syncProfile(config, true);
+  return getNodes(getProfileKey(config));
 }

@@ -115,7 +115,7 @@ export async function updateNode(config: ConnectionConfig | null, node: Bookmark
   const next = { ...node, ...changes, updatedAt: now(), revision: (node.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' };
   if (next.nodeType === 'text' && typeof next.content === 'string') {
     if (!next.content.trim()) throw new Error('文案内容不能为空。');
-    next.title = getTextTitle(next.content);
+    if (!next.title?.trim()) next.title = getTextTitle(next.content);
   }
   if (next.nodeType === 'bookmark' && next.url) {
     next.url = normalizeUrl(next.url);
@@ -129,8 +129,9 @@ export async function updateNode(config: ConnectionConfig | null, node: Bookmark
   return next;
 }
 
-export async function deleteSubtree(config: ConnectionConfig | null, nodeId: string): Promise<string[]> {
-  const nodes = await loadLocalNodes(config);
+export async function deleteSubtree(config: ConnectionConfig | null, nodeId: string, additionalNodes: BookmarkNode[] = []): Promise<string[]> {
+  const localNodes = await loadLocalNodes(config);
+  const nodes = [...new Map([...localNodes, ...additionalNodes].map((node) => [node.id, node])).values()];
   const toDelete = new Set<string>([nodeId]);
   let changed = true;
   while (changed) {

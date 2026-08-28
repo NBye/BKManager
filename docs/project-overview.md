@@ -114,7 +114,7 @@ trim(esUrl) + "|" + actualIndexName
 
 ## 5. 本地存储设计
 
-IndexedDB 数据库名称为 `bookmark-manager-local`，版本为 `1`，包含三个 Object Store：
+IndexedDB 数据库名称为 `bookmark-manager-local`，版本为 `2`，包含三个 Object Store：
 
 | Store | Key Path | 用途 |
 | --- | --- | --- |
@@ -146,18 +146,15 @@ IndexedDB 数据库名称为 `bookmark-manager-local`，版本为 `1`，包含�
 一次 `syncProfile` 的主要步骤如下：
 
 1. 检查目标索引是否存在，不存在时尝试创建并写入映射。
-2. 读取本地节点和同步队列快照。
-3. 使用 ES `match_all` 分页读取远端全部节点，每页 500 条。
-4. 按节点 ID 合并本地与远端数据，冲突时保留 `updatedAt` 较新的版本。
-5. 经过 `sanitizeNodes` 清洗：去重、过滤软删除节点、过滤无效 URL、过滤失效父级和循环层级。
-6. 通过 ES `_bulk` 批量 upsert 合并后的节点。
-7. 只对本地或远端明确带 `deletedAt` 且没有更新版本的一方执行远端删除；清洗过程中被过滤的异常节点不会直接物理删除。写入先于删除，避免写入失败时先丢失服务器数据。
-8. 再次读取同步队列，写回合并结果，并只清理本轮开始时内容未变化且已完成的操作。
-9. 更新 `lastSyncAt`、`localDataUpdatedAt` 和 `syncStatus`。
+2. 使用 ES `match_all` 分页读取远端全部节点，每页 500 条，不再依据时间或版本做增量判断。
+3. 校验远端节点关系。软删除节点、父目录不存在、父节点不是目录或形成循环的节点，统一通过 `_bulk delete` 物理删除；清理失败则停止本轮同步。
+4. 读取当前 Profile 的本地节点和待同步队列。明确的本地新增、修改会提交到 ES，明确的本地删除会删除 ES；没有本地待处理操作的缓存不参与覆盖云端。
+5. 清理完成后再次读取 ES，并以 ES 返回的完整有效节点集合原子替换本地 Profile，云端新增会下载到本地，云端没有的旧本地缓存会被移除。
+6. ES 全量校准成功后清空该 Profile 的待同步队列，并更新 `lastSyncAt`、`lastFullSyncAt`、`localDataUpdatedAt` 和 `syncStatus`。
 
-没有 ES 配置时不会执行远程请求，所有操作只写入 `offline-local` Profile。首次配置并成功测试 ES 后，离线节点会先复制到目标 Profile，再按正常合并规则同步；迁移失败时原离线 Profile 保留，不会因为配置失败而清除。
+没有 ES 配置时不会执行远程请求，所有操作只写入 `offline-local` Profile。首次绑定 ES 时，先读取云端并清理云端异常节点，再将离线 Profile 中云端不存在且关系完整的节点上传；同 ID 数据以云端为准。上传和本地 Profile 原子替换成功后才清除离线 Profile，失败时离线数据保留。
 
-同步失败时不会清理队列。当前实现按单设备顺序使用，不处理多个设备同时写入的并发冲突；在此前提下，本地未上传修改会优先进入合并结果，远端异常数据也不会因为一次清洗被直接删除。
+同步失败时不会清理待同步队列，也不会用不完整的远端结果替换本地缓存。当前实现按单设备顺序使用，不处理多个设备同时写入的并发冲突；同步不比较时间、版本号或更新时间。
 
 ### 6.2 ES API 使用
 
@@ -170,9 +167,9 @@ IndexedDB 数据库名称为 `bookmark-manager-local`，版本为 `1`，包含�
 | 分页读取 | `POST` | `/{index}/_search` |
 | 批量写入或删除 | `POST` | `/_bulk` |
 
-搜索使用 `updatedAt asc`、`id asc` 排序，并通过 `search_after` 分页。批量写入采用 `index` action，以节点 ID 作为 `_id`；删除采用 `delete` action。
+搜索使用 `id asc` 排序，并通过 `search_after` 分页；排序只用于稳定分页，不参与数据决策。批量写入采用 `index` action，以节点 ID 作为 `_id`；删除采用 `delete` action，不等待索引刷新完成，待同步队列负责避免短暂的搜索延迟覆盖本地修改。
 
-当前同步算法最终以合并结果为准批量写入和删除，队列里的 `action` 字段主要用于记录本地变更语义和防止并发覆盖，并没有单独执行 create/update/delete 三种不同的远程分支。
+常规同步以 ES 全量快照为本地基准；队列里的 `action` 只表示用户明确发起的新增、修改或删除，完成这些操作后再次读取 ES，最终仍以 ES 返回结果落地。
 
 ### 6.3 状态和错误
 
