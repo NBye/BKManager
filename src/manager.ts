@@ -20,6 +20,7 @@ const settingsStatus = document.querySelector<HTMLElement>('#settings-status')!;
 const managerView = document.querySelector<HTMLElement>('#manager-view')!;
 const settingsView = document.querySelector<HTMLElement>('#settings-view')!;
 const helpView = document.querySelector<HTMLElement>('#help-view')!;
+const aboutView = document.querySelector<HTMLElement>('#about-view')!;
 const sidebarProfile = document.querySelector<HTMLElement>('#sidebar-profile')!;
 const settingsForm = document.querySelector<HTMLFormElement>('#form')!;
 const esUrl = document.querySelector<HTMLInputElement>('#es-url')!;
@@ -88,13 +89,15 @@ function syncJsonToForm(): void {
   }
 }
 
-function showView(view: 'manager' | 'settings' | 'help'): void {
+function showView(view: 'manager' | 'settings' | 'help' | 'about'): void {
   managerView.classList.toggle('hidden', view !== 'manager');
   settingsView.classList.toggle('hidden', view !== 'settings');
   helpView.classList.toggle('hidden', view !== 'help');
+  aboutView.classList.toggle('hidden', view !== 'about');
   document.querySelector('#nav-manager')?.classList.toggle('active', view === 'manager');
   document.querySelector('#nav-settings')?.classList.toggle('active', view === 'settings');
   document.querySelector('#nav-help')?.classList.toggle('active', view === 'help');
+  document.querySelector('#nav-about')?.classList.toggle('active', view === 'about');
 }
 
 function showStatus(message: string, error = false): void {
@@ -283,6 +286,7 @@ async function importBackup(file: File): Promise<void> {
 document.querySelector<HTMLButtonElement>('#nav-manager')!.addEventListener('click', () => showView('manager'));
 document.querySelector<HTMLButtonElement>('#nav-settings')!.addEventListener('click', () => showView('settings'));
 document.querySelector<HTMLButtonElement>('#nav-help')!.addEventListener('click', () => showView('help'));
+document.querySelector<HTMLButtonElement>('#nav-about')!.addEventListener('click', () => showView('about'));
 document.querySelector<HTMLButtonElement>('#sync')!.addEventListener('click', async () => { try { const config = await getActiveConfig(); if (!config) { showStatus('当前为离线模式，配置 ES 后才能同步'); return; } showStatus('全量校准同步中…'); await syncNow(config, true); await refresh(); } catch (error) { showStatus(error instanceof Error ? error.message : '同步失败', true); } });
 document.querySelector<HTMLButtonElement>('#add-folder')!.addEventListener('click', async () => {
   const config = await getActiveConfig();

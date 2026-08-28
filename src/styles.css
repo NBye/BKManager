@@ -158,6 +158,12 @@ button { cursor: pointer; }
 .help-readme a { color: #111; text-decoration: underline; }
 .workspace-view .titlebar { margin-bottom: 4px; }
 .workspace-view .titlebar h1 { font-size: 24px; font-weight: 700; }
+.about-meta { margin: 24px 0 0; max-width: 520px; }
+.about-meta div { display: flex; gap: 14px; padding: 12px 0; border-bottom: 1px solid #ededed; }
+.about-meta div:first-child { padding-top: 0; }
+.about-meta dt { flex: 0 0 70px; color: #777; font-size: 12px; }
+.about-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: #202124; font-size: 13px; }
+.about-meta a { color: #202124; text-decoration: underline; text-underline-offset: 2px; }
 .eyebrow { margin: 0 0 4px; color: #8b8b8b; font-size: 10px; letter-spacing: .16em; }
 .settings-mode-tabs { display: flex; gap: 6px; margin: 20px 0 12px; }
 .settings-mode-tabs .secondary { border: 1px solid #e1e1e1; padding: 7px 12px; background: #fff; }
