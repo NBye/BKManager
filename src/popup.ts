@@ -1,11 +1,11 @@
 import './styles.css';
-import { createBookmark, createFolder, deleteSubtree, DuplicateBookmarkError, loadNodes, moveNode, moveNodeUp, syncNow, updateNode } from './app';
+import { createBookmark, createFolder, createText, deleteSubtree, DuplicateBookmarkError, loadNodes, moveNode, moveNodeUp, syncNow, updateNode } from './app';
 import { CONFIG_KEY, getConfig, getOfflineMode, isConfigComplete, saveConfig, setOfflineMode } from './config';
 import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields } from './config-editor';
 import { testConnection } from './es';
 import { bindProfile } from './sync';
 import { renderTree } from './tree';
-import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog, showToast as showSharedToast } from './ui';
+import { showBookmarkDialog, showConfirmDialog, showCreateDialog, showTextContentDialog, showTextDialog, showToast as showSharedToast } from './ui';
 import type { BookmarkNode, ConnectionConfig } from './types';
 import { copyNode } from './node-service';
 
@@ -141,6 +141,31 @@ async function editNode(node: BookmarkNode): Promise<void> {
   renderCurrentTree();
 }
 
+async function createNodeInFolder(folder: BookmarkNode): Promise<void> {
+  const result = await showCreateDialog(currentNodes, folder.id);
+  if (!result) return;
+  if (result.nodeType === 'folder') {
+    const created = await createFolder(activeConfig, folder.id, result.name);
+    currentNodes = [...currentNodes, created];
+  } else if (result.nodeType === 'text') {
+    const created = await createText(activeConfig, folder.id, result.content, result.title);
+    currentNodes = [...currentNodes, created];
+  } else {
+    try {
+      const created = await createBookmark(activeConfig, result.data.folderId, result.data.url, result.data.title, result.data.iconUrl);
+      currentNodes = [...currentNodes, created];
+    } catch (error) {
+      if (!(error instanceof DuplicateBookmarkError)) throw error;
+      const targetFolder = result.data.folderId ? currentNodes.find((node) => node.id === result.data.folderId)?.name ?? '选中文件夹' : '根目录';
+      const shouldMove = await showConfirmDialog('地址已收藏', `${error.message}\n\n是否迁移到${targetFolder}，并更新标题和图标？`, '迁移收藏');
+      if (!shouldMove) return;
+      const updated = await updateNode(activeConfig, error.existing, { parentId: result.data.folderId, title: result.data.title, iconUrl: result.data.iconUrl });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+    }
+  }
+  renderCurrentTree();
+}
+
 async function copyTextNode(node: BookmarkNode): Promise<void> {
   try {
     await copyNode(node);
@@ -167,6 +192,11 @@ function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
   };
   const edit = createAction('编辑', 'm4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Zm10.5-12.5 3 3');
   edit.addEventListener('click', () => { closeContextMenu(); void editNode(node).catch((error) => showStatus(error instanceof Error ? error.message : '编辑失败', true)); });
+  if (node.nodeType === 'folder') {
+    const create = createAction('新建', 'M12 5v14M5 12h14');
+    create.addEventListener('click', () => { closeContextMenu(); void createNodeInFolder(node).catch((error) => showStatus(error instanceof Error ? error.message : '新建失败', true)); });
+    menu.append(create);
+  }
   const moveUp = createAction('上移', 'M12 19V5m0 0-5 5m5-5 5 5');
   moveUp.disabled = !node.parentId;
   moveUp.title = node.parentId ? '移入上一级目录' : '根目录节点不能上移';

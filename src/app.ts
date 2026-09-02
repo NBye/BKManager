@@ -1,6 +1,6 @@
 import { getConfig, isConfigComplete } from './config';
 import { getNodes } from './db';
-import { getTextTitle, isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
+import { getTextTitle, isBase64IconUrl, isSupportedBookmarkUrl, sanitizeNodes } from './nodes';
 import { getStorageProfileKey, initializeProfile, persistLocalChanges, requestSync, syncProfile } from './sync';
 import type { BookmarkNode, ConnectionConfig, NodeType } from './types';
 import { getProfileKey, makeId, normalizeUrl, now } from './types';
@@ -80,7 +80,7 @@ export async function createBookmark(config: ConnectionConfig | null, parentId: 
     url: normalizedUrl,
     urlKey: normalizedUrl,
     title: title.trim() || normalizedUrl,
-    iconUrl,
+    iconUrl: isBase64IconUrl(iconUrl) ? undefined : iconUrl,
     sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000,
     createdAt: now(),
     updatedAt: now(),
@@ -91,7 +91,7 @@ export async function createBookmark(config: ConnectionConfig | null, parentId: 
   return node;
 }
 
-export async function createText(config: ConnectionConfig | null, parentId: string | null, content: string): Promise<BookmarkNode> {
+export async function createText(config: ConnectionConfig | null, parentId: string | null, content: string, title?: string): Promise<BookmarkNode> {
   if (!content.trim()) throw new Error('选中的文案不能为空。');
   const nodes = await loadLocalNodes(config);
   const siblings = nodes.filter((node) => node.parentId === parentId);
@@ -99,7 +99,7 @@ export async function createText(config: ConnectionConfig | null, parentId: stri
     id: makeId(),
     nodeType: 'text',
     parentId,
-    title: getTextTitle(content),
+    title: title?.trim() || getTextTitle(content),
     content,
     sortOrder: siblings.length ? Math.max(...siblings.map((item) => item.sortOrder)) + 1000 : 1000,
     createdAt: now(),
@@ -113,6 +113,7 @@ export async function createText(config: ConnectionConfig | null, parentId: stri
 
 export async function updateNode(config: ConnectionConfig | null, node: BookmarkNode, changes: Partial<BookmarkNode>): Promise<BookmarkNode> {
   const next = { ...node, ...changes, updatedAt: now(), revision: (node.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' };
+  if (isBase64IconUrl(next.iconUrl)) next.iconUrl = undefined;
   if (next.nodeType === 'text' && typeof next.content === 'string') {
     if (!next.content.trim()) throw new Error('文案内容不能为空。');
     if (!next.title?.trim()) next.title = getTextTitle(next.content);

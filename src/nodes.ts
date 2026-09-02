@@ -10,6 +10,10 @@ export function isSupportedBookmarkUrl(value: string): boolean {
   }
 }
 
+export function isBase64IconUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^data:[^,]*;base64,/i.test(value.trim());
+}
+
 export function getTextTitle(content: string): string {
   return Array.from(content).slice(0, 20).join('');
 }

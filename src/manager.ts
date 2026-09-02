@@ -1,7 +1,7 @@
 import './styles.css';
 import readmeContent from '../README.md?raw';
 import { marked } from 'marked';
-import { createFolder, deleteSubtree, moveNode, persistNodes, syncNow, updateNode } from './app';
+import { createBookmark, createFolder, createText, deleteSubtree, DuplicateBookmarkError, moveNode, persistNodes, syncNow, updateNode } from './app';
 import { CONFIG_KEY, getConfig, isConfigComplete, saveConfig } from './config';
 import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields } from './config-editor';
 import { getNodes } from './db';
@@ -11,7 +11,7 @@ import { getIndexName, now } from './types';
 import { fetchAllNodes, testConnection } from './es';
 import { parseBackup } from './nodes';
 import { renderTree } from './tree';
-import { showBookmarkDialog, showConfirmDialog, showTextContentDialog, showTextDialog, showToast } from './ui';
+import { showBookmarkDialog, showConfirmDialog, showCreateDialog, showTextContentDialog, showTextDialog, showToast } from './ui';
 import { copyNode, getNodeTitle } from './node-service';
 
 const tree = document.querySelector<HTMLElement>('#tree')!;
@@ -35,6 +35,7 @@ let settingsMode: 'form' | 'json' = 'form';
 let inlineEditFolderId: string | null = null;
 let currentNodes: BookmarkNode[] = [];
 let visibleNodes: BookmarkNode[] = [];
+let activeContextMenu: HTMLElement | null = null;
 
 async function getActiveConfig(): Promise<ConnectionConfig | null> {
   const config = await getConfig();
@@ -105,6 +106,61 @@ function showStatus(message: string, error = false): void {
   status.classList.toggle('error', error);
 }
 
+function closeContextMenu(): void {
+  activeContextMenu?.remove();
+  activeContextMenu = null;
+}
+
+async function createNodeInFolder(config: ConnectionConfig | null, folder: BookmarkNode): Promise<void> {
+  const result = await showCreateDialog(currentNodes, folder.id);
+  if (!result) return;
+  if (result.nodeType === 'folder') {
+    const created = await createFolder(config, folder.id, result.name);
+    currentNodes = [...currentNodes, created];
+    visibleNodes = [...visibleNodes, created];
+  } else if (result.nodeType === 'text') {
+    const created = await createText(config, folder.id, result.content, result.title);
+    currentNodes = [...currentNodes, created];
+    visibleNodes = [...visibleNodes, created];
+  } else {
+    try {
+      const created = await createBookmark(config, result.data.folderId, result.data.url, result.data.title, result.data.iconUrl);
+      currentNodes = [...currentNodes, created];
+      visibleNodes = [...visibleNodes, created];
+    } catch (error) {
+      if (!(error instanceof DuplicateBookmarkError)) throw error;
+      const targetFolder = result.data.folderId ? currentNodes.find((node) => node.id === result.data.folderId)?.name ?? '选中文件夹' : '根目录';
+      const shouldMove = await showConfirmDialog('地址已收藏', `${error.message}\n\n是否迁移到${targetFolder}，并更新标题和图标？`, '迁移收藏');
+      if (!shouldMove) return;
+      const updated = await updateNode(config, error.existing, { parentId: result.data.folderId, title: result.data.title, iconUrl: result.data.iconUrl });
+      currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
+      visibleNodes = visibleNodes.map((item) => item.id === updated.id ? updated : item);
+    }
+  }
+  await refreshView(config);
+}
+
+function showNodeContextMenu(config: ConnectionConfig | null, node: BookmarkNode, event: MouseEvent): void {
+  if (node.nodeType !== 'folder') return;
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'node-context-menu';
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新建</span>';
+  create.addEventListener('click', () => {
+    closeContextMenu();
+    void createNodeInFolder(config, node).catch((error) => showStatus(error instanceof Error ? error.message : '新建失败', true));
+  });
+  menu.append(create);
+  document.body.append(menu);
+  const menuWidth = 92;
+  menu.style.left = `${Math.min(event.clientX, Math.max(4, window.innerWidth - menuWidth))}px`;
+  menu.style.top = `${Math.min(event.clientY, Math.max(4, window.innerHeight - 55))}px`;
+  activeContextMenu = menu;
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+}
+
 async function loadManagementNodes(config: ConnectionConfig | null): Promise<BookmarkNode[]> {
   return getNodes(getStorageProfileKey(config));
 }
@@ -173,6 +229,11 @@ async function refreshView(config: ConnectionConfig | null): Promise<void> {
       const movedById = new Map(moved.map((item) => [item.id, item]));
       currentNodes = currentNodes.map((item) => movedById.get(item.id) ?? item);
       await refreshView(config);
+    },
+    onContextMenu: (node, event) => {
+      void ensureNodesLocal(config, node)
+        .then(() => showNodeContextMenu(config, node, event))
+        .catch((error) => showStatus(error instanceof Error ? error.message : '打开新建菜单失败', true));
     },
     onOpen: (node) => {
       if (node.nodeType === 'bookmark' && node.url) void chrome.tabs.create({ url: node.url });

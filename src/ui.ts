@@ -1,4 +1,5 @@
 import type { BookmarkNode } from './types';
+import { isBase64IconUrl } from './nodes';
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -27,6 +28,16 @@ interface BookmarkFormParts {
   focusTitle: () => void;
 }
 
+interface FormParts {
+  form: HTMLFormElement;
+  focus: () => void;
+}
+
+export type CreateDialogResult =
+  | { nodeType: 'bookmark'; data: BookmarkDialogData }
+  | { nodeType: 'folder'; name: string }
+  | { nodeType: 'text'; title: string; content: string };
+
 function getOrigin(value: string): string | null {
   try {
     const url = new URL(value.trim());
@@ -50,11 +61,11 @@ function closeModal(): void {
   modalRoot().replaceChildren();
 }
 
-function createModal(title: string): { panel: HTMLElement; close: () => void } {
+function createModal(title: string, backdropClass = ''): { panel: HTMLElement; close: () => void } {
   const root = modalRoot();
   root.replaceChildren();
   const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop';
+  backdrop.className = `modal-backdrop${backdropClass ? ` ${backdropClass}` : ''}`;
   const panel = document.createElement('section');
   panel.className = 'modal-panel';
   const header = document.createElement('div');
@@ -74,6 +85,22 @@ function createModal(title: string): { panel: HTMLElement; close: () => void } {
   return { panel, close: closeModal };
 }
 
+function createFormActions(onCancel: () => void, submitText: string): HTMLDivElement {
+  const actions = document.createElement('div');
+  actions.className = 'form-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'secondary';
+  cancel.textContent = '取消';
+  cancel.addEventListener('click', onCancel);
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.className = 'primary';
+  submit.textContent = submitText;
+  actions.append(cancel, submit);
+  return actions;
+}
+
 function createBookmarkForm(nodes: BookmarkNode[], initial: BookmarkDialogData, onSubmit: (value: BookmarkDialogData) => void, onCancel: () => void, pageForm = false): BookmarkFormParts {
     const form = document.createElement('form');
     form.className = `form ${pageForm ? 'capture-form' : 'modal-form'}`;
@@ -88,7 +115,13 @@ function createBookmarkForm(nodes: BookmarkNode[], initial: BookmarkDialogData, 
     const iconFallback = document.createElement('span');
     iconFallback.className = 'bookmark-icon-fallback';
     iconFallback.textContent = '无图标';
-    iconPreview.append(iconImage, iconFallback);
+    const removeIcon = document.createElement('button');
+    removeIcon.type = 'button';
+    removeIcon.className = 'bookmark-icon-remove';
+    removeIcon.setAttribute('aria-label', '删除网站图标');
+    removeIcon.title = '删除网站图标';
+    removeIcon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+    iconPreview.append(iconImage, iconFallback, removeIcon);
     iconField.append(iconLabel, iconPreview);
     const title = document.createElement('label');
     title.textContent = '标题';
@@ -177,14 +210,24 @@ function createBookmarkForm(nodes: BookmarkNode[], initial: BookmarkDialogData, 
     browser.append(breadcrumb, childFolders);
     folder.append(browser);
     const initialOrigin = getOrigin(initial.url);
-    let previewIconUrl = initial.iconUrl;
+    const initialHasBase64Icon = isBase64IconUrl(initial.iconUrl);
+    if (initialHasBase64Icon) showToast('图标base64，已被删除。');
+    let previewIconUrl = initialHasBase64Icon ? undefined : initial.iconUrl;
+    let iconRemoved = initialHasBase64Icon;
     const updateIconPreview = () => {
       const origin = getOrigin(urlInput.value);
-      const nextIconUrl = origin === initialOrigin && initial.iconUrl ? initial.iconUrl : origin ? `${origin}/favicon.ico` : undefined;
+      const nextIconUrl = iconRemoved
+        ? undefined
+        : origin === initialOrigin && initial.iconUrl
+          ? initial.iconUrl
+          : origin
+            ? `${origin}/favicon.ico`
+            : undefined;
       if (nextIconUrl === previewIconUrl && iconImage.src) return;
       previewIconUrl = nextIconUrl;
       iconFallback.classList.toggle('hidden', Boolean(nextIconUrl));
       iconImage.classList.toggle('hidden', !nextIconUrl);
+      removeIcon.classList.toggle('hidden', !nextIconUrl);
       if (nextIconUrl) iconImage.src = nextIconUrl;
       else iconImage.removeAttribute('src');
     };
@@ -196,26 +239,65 @@ function createBookmarkForm(nodes: BookmarkNode[], initial: BookmarkDialogData, 
       iconImage.classList.add('hidden');
       iconFallback.classList.remove('hidden');
     });
+    removeIcon.addEventListener('click', () => {
+      iconRemoved = true;
+      updateIconPreview();
+    });
     urlInput.addEventListener('input', updateIconPreview);
     updateIconPreview();
-    const actions = document.createElement('div');
-    actions.className = 'form-actions';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'secondary';
-    cancel.textContent = '取消';
-    cancel.addEventListener('click', onCancel);
-    const submit = document.createElement('button');
-    submit.type = 'submit';
-    submit.className = 'primary';
-    submit.textContent = '保存收藏';
-    actions.append(cancel, submit);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       onSubmit({ url: urlInput.value.trim(), title: titleInput.value.trim(), iconUrl: previewIconUrl, folderId: selectedFolderId });
     });
-    form.append(iconField, title, url, folder, actions);
+    form.append(iconField, title, url, folder, createFormActions(onCancel, '保存收藏'));
     return { form, focusTitle: () => { titleInput.focus(); titleInput.select(); } };
+}
+
+function createTextInputForm(labelText: string, initialValue: string, onSubmit: (value: string) => void, onCancel: () => void, submitText = '保存'): FormParts {
+  const form = document.createElement('form');
+  form.className = 'form modal-form';
+  const label = document.createElement('label');
+  label.textContent = labelText;
+  const input = document.createElement('input');
+  input.value = initialValue;
+  input.required = true;
+  label.append(input);
+  form.append(label, createFormActions(onCancel, submitText));
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    onSubmit(input.value.trim());
+  });
+  return { form, focus: () => { input.focus(); input.select(); } };
+}
+
+function createTextContentForm(
+  initial: { title: string; content: string },
+  onSubmit: (value: { title: string; content: string }) => void,
+  onCancel: () => void,
+  submitText = '保存',
+  titleRequired = true
+): FormParts {
+  const form = document.createElement('form');
+  form.className = 'form modal-form';
+  const titleLabel = document.createElement('label');
+  titleLabel.textContent = '标题';
+  const titleInput = document.createElement('input');
+  titleInput.value = initial.title;
+  titleInput.required = titleRequired;
+  titleLabel.append(titleInput);
+  const contentLabel = document.createElement('label');
+  contentLabel.textContent = '文案内容';
+  const contentInput = document.createElement('textarea');
+  contentInput.value = initial.content;
+  contentInput.required = true;
+  contentInput.rows = 8;
+  contentLabel.append(contentInput);
+  form.append(titleLabel, contentLabel, createFormActions(onCancel, submitText));
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    onSubmit({ title: titleInput.value.trim(), content: contentInput.value });
+  });
+  return { form, focus: () => { titleInput.focus(); titleInput.select(); } };
 }
 
 export function showBookmarkDialog(nodes: BookmarkNode[], initial: BookmarkDialogData): Promise<BookmarkDialogData | null> {
@@ -238,66 +320,78 @@ export function showBookmarkFormPage(container: HTMLElement, nodes: BookmarkNode
   });
 }
 
+export function showCreateDialog(nodes: BookmarkNode[], folderId: string | null): Promise<CreateDialogResult | null> {
+  return new Promise((resolve) => {
+    const { panel } = createModal('新建', 'create-modal-backdrop');
+    const tabs = document.createElement('div');
+    tabs.className = 'settings-mode-tabs create-type-tabs';
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', '新建类型');
+    const content = document.createElement('div');
+    content.className = 'create-dialog-content';
+    const tabButtons = new Map<CreateDialogResult['nodeType'], HTMLButtonElement>();
+    let settled = false;
+    const finish = (result: CreateDialogResult | null): void => {
+      if (settled) return;
+      settled = true;
+      closeModal();
+      resolve(result);
+    };
+    const cancel = (): void => finish(null);
+    const render = (nodeType: CreateDialogResult['nodeType']): void => {
+      for (const [type, button] of tabButtons) {
+        button.classList.toggle('active', type === nodeType);
+        button.setAttribute('aria-selected', String(type === nodeType));
+      }
+      content.replaceChildren();
+      if (nodeType === 'bookmark') {
+        const parts = createBookmarkForm(nodes, { url: '', title: '', folderId }, (data) => finish({ nodeType, data }), cancel);
+        content.append(parts.form);
+        setTimeout(parts.focusTitle, 0);
+        return;
+      }
+      if (nodeType === 'folder') {
+        const parts = createTextInputForm('文件夹名称', '', (value) => finish({ nodeType, name: value || '未命名' }), cancel, '创建文件夹');
+        const input = parts.form.querySelector<HTMLInputElement>('input');
+        if (input) input.placeholder = '未命名';
+        content.append(parts.form);
+        setTimeout(parts.focus, 0);
+        return;
+      }
+      const parts = createTextContentForm({ title: '', content: '' }, (value) => finish({ nodeType, ...value }), cancel, '创建文本', false);
+      content.append(parts.form);
+      setTimeout(parts.focus, 0);
+    };
+    for (const [nodeType, label] of [['bookmark', '链接'], ['folder', '文件夹'], ['text', '文本']] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary';
+      button.textContent = label;
+      button.setAttribute('role', 'tab');
+      button.addEventListener('click', () => render(nodeType));
+      tabButtons.set(nodeType, button);
+      tabs.append(button);
+    }
+    panel.append(tabs, content);
+    render('text');
+  });
+}
+
 export function showTextDialog(titleText: string, labelText: string, initialValue: string): Promise<string | null> {
   return new Promise((resolve) => {
     const { panel } = createModal(titleText);
-    const form = document.createElement('form');
-    form.className = 'form modal-form';
-    const label = document.createElement('label');
-    label.textContent = labelText;
-    const input = document.createElement('input');
-    input.value = initialValue;
-    input.required = true;
-    label.append(input);
-    const actions = document.createElement('div');
-    actions.className = 'form-actions';
-    const cancel = document.createElement('button');
-    cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = '取消';
-    cancel.addEventListener('click', () => { closeModal(); resolve(null); });
-    const submit = document.createElement('button');
-    submit.type = 'submit'; submit.className = 'primary'; submit.textContent = '保存';
-    actions.append(cancel, submit);
-    form.append(label, actions);
-    form.addEventListener('submit', (event) => { event.preventDefault(); closeModal(); resolve(input.value.trim()); });
-    panel.append(form);
-    setTimeout(() => { input.focus(); input.select(); }, 0);
+    const parts = createTextInputForm(labelText, initialValue, (value) => { closeModal(); resolve(value); }, () => { closeModal(); resolve(null); });
+    panel.append(parts.form);
+    setTimeout(parts.focus, 0);
   });
 }
 
 export function showTextContentDialog(titleText: string, initial: { title: string; content: string }): Promise<{ title: string; content: string } | null> {
   return new Promise((resolve) => {
     const { panel } = createModal(titleText);
-    const form = document.createElement('form');
-    form.className = 'form modal-form';
-    const titleLabel = document.createElement('label');
-    titleLabel.textContent = '标题';
-    const titleInput = document.createElement('input');
-    titleInput.value = initial.title;
-    titleInput.required = true;
-    titleLabel.append(titleInput);
-    const contentLabel = document.createElement('label');
-    contentLabel.textContent = '文案内容';
-    const contentInput = document.createElement('textarea');
-    contentInput.value = initial.content;
-    contentInput.required = true;
-    contentInput.rows = 8;
-    contentLabel.append(contentInput);
-    const actions = document.createElement('div');
-    actions.className = 'form-actions';
-    const cancel = document.createElement('button');
-    cancel.type = 'button'; cancel.className = 'secondary'; cancel.textContent = '取消';
-    cancel.addEventListener('click', () => { closeModal(); resolve(null); });
-    const submit = document.createElement('button');
-    submit.type = 'submit'; submit.className = 'primary'; submit.textContent = '保存';
-    actions.append(cancel, submit);
-    form.append(titleLabel, contentLabel, actions);
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      closeModal();
-      resolve({ title: titleInput.value.trim(), content: contentInput.value });
-    });
-    panel.append(form);
-    setTimeout(() => { titleInput.focus(); titleInput.select(); }, 0);
+    const parts = createTextContentForm(initial, (value) => { closeModal(); resolve(value); }, () => { closeModal(); resolve(null); });
+    panel.append(parts.form);
+    setTimeout(parts.focus, 0);
   });
 }
 
