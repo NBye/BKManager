@@ -11,7 +11,7 @@ import { getIndexName, now } from './types';
 import { fetchAllNodes, testConnection } from './es';
 import { parseBackup } from './nodes';
 import { renderTree } from './tree';
-import { showBookmarkDialog, showConfirmDialog, showCreateDialog, showTextContentDialog, showTextDialog, showToast } from './ui';
+import { showBookmarkDialog, showConfirmDialog, showCreateDialog, showFolderDialog, showTextContentDialog, showToast } from './ui';
 import { copyNode, getNodeTitle } from './node-service';
 
 const tree = document.querySelector<HTMLElement>('#tree')!;
@@ -115,11 +115,11 @@ async function createNodeInFolder(config: ConnectionConfig | null, folder: Bookm
   const result = await showCreateDialog(currentNodes, folder.id);
   if (!result) return;
   if (result.nodeType === 'folder') {
-    const created = await createFolder(config, folder.id, result.name);
+    const created = await createFolder(config, result.folderId, result.name);
     currentNodes = [...currentNodes, created];
     visibleNodes = [...visibleNodes, created];
   } else if (result.nodeType === 'text') {
-    const created = await createText(config, folder.id, result.content, result.title);
+    const created = await createText(config, result.folderId, result.content, result.title);
     currentNodes = [...currentNodes, created];
     visibleNodes = [...visibleNodes, created];
   } else {
@@ -262,9 +262,9 @@ async function refreshView(config: ConnectionConfig | null): Promise<void> {
 
 async function editNode(config: ConnectionConfig | null, node: BookmarkNode): Promise<void> {
   if (node.nodeType === 'folder') {
-    const name = await showTextDialog('编辑目录', '目录名称', node.name ?? '未命名');
-    if (name) {
-      const updated = await updateNode(config, node, { name });
+    const result = await showFolderDialog('编辑目录', currentNodes, { name: node.name ?? '未命名', folderId: node.parentId }, node.id);
+    if (result) {
+      const updated = await updateNode(config, node, { name: result.name, parentId: result.folderId });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   } else if (node.nodeType === 'bookmark') {
@@ -274,9 +274,9 @@ async function editNode(config: ConnectionConfig | null, node: BookmarkNode): Pr
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   } else {
-    const result = await showTextContentDialog('编辑文案', { title: node.title ?? '', content: node.content ?? '' });
+    const result = await showTextContentDialog('编辑文案', currentNodes, { title: node.title ?? '', content: node.content ?? '', folderId: node.parentId });
     if (result !== null) {
-      const updated = await updateNode(config, node, { title: result.title, content: result.content });
+      const updated = await updateNode(config, node, { title: result.title, content: result.content, parentId: result.folderId });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   }

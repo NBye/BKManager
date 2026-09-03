@@ -6,6 +6,7 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: #fff; font-size: 12px; }
+.popup-body { overflow: hidden; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 
@@ -17,7 +18,7 @@ button { cursor: pointer; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 .page { padding: 18px; }
-.popup-shell { width: 320px; min-height: 560px; max-height: 620px; overflow-y: auto; overflow-x: hidden; background: #fff; user-select: none; -webkit-user-select: none; }
+.popup-shell { display: flex; width: 320px; height: 600px; min-height: 560px; max-height: 620px; flex-direction: column; overflow: hidden; background: #fff; user-select: none; -webkit-user-select: none; }
 .popup-shell input, .popup-shell textarea, .popup-shell select { user-select: text; -webkit-user-select: text; }
 .popup-shell.config-mode { min-height: 560px; }
 .popup-header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 0 18px; border-bottom: 1px solid #e6e6e6; background: rgb(255 255 255 / 96%); backdrop-filter: blur(8px); }
@@ -30,7 +31,8 @@ button { cursor: pointer; }
 .search-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .search-bar { display: flex; align-items: center; gap: 8px; margin: 12px 20px 2px; padding: 7px 10px; border: 1px solid #d7d7d7; border-radius: 8px; color: #666; }
 .search-bar input { width: 100%; border: 0; outline: 0; }
-.popup-tree { min-height: 430px; padding: 6px 10px 16px; border: 0; }
+.popup-tree-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.popup-tree { min-height: 100%; padding: 6px 10px 16px; border: 0; }
 .flat-breadcrumb { display: flex; align-items: center; gap: 3px; min-height: 18px; margin: 0; overflow: hidden; white-space: nowrap; }
 .flat-path-link { border: 0; padding: 1px 2px; color: #555; background: transparent; font-size: 11px; }
 .flat-path-link { overflow: hidden; text-overflow: ellipsis; }

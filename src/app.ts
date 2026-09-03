@@ -113,6 +113,22 @@ export async function createText(config: ConnectionConfig | null, parentId: stri
 
 export async function updateNode(config: ConnectionConfig | null, node: BookmarkNode, changes: Partial<BookmarkNode>): Promise<BookmarkNode> {
   const next = { ...node, ...changes, updatedAt: now(), revision: (node.revision ?? 0) + 1, updatedBy: config?.profileId ?? 'offline' };
+  let localNodes: BookmarkNode[] | null = null;
+  if ('parentId' in changes && next.parentId) {
+    localNodes = await loadLocalNodes(config);
+    const parent = localNodes.find((item) => item.id === next.parentId);
+    if (!parent || parent.nodeType !== 'folder') throw new Error('所选保存目录不存在。');
+    if (next.nodeType === 'folder') {
+      const visited = new Set<string>();
+      let ancestorId: string | null = next.parentId;
+      while (ancestorId) {
+        if (ancestorId === next.id) throw new Error('不能将文件夹移动到自己或自己的子目录中。');
+        if (visited.has(ancestorId)) throw new Error('目标目录层级异常，无法移动。');
+        visited.add(ancestorId);
+        ancestorId = localNodes.find((item) => item.id === ancestorId)?.parentId ?? null;
+      }
+    }
+  }
   if (isBase64IconUrl(next.iconUrl)) next.iconUrl = undefined;
   if (next.nodeType === 'text' && typeof next.content === 'string') {
     if (!next.content.trim()) throw new Error('文案内容不能为空。');
@@ -122,8 +138,8 @@ export async function updateNode(config: ConnectionConfig | null, node: Bookmark
     next.url = normalizeUrl(next.url);
     if (!isSupportedBookmarkUrl(next.url)) throw new Error('只允许收藏 HTTP 或 HTTPS 网页地址。');
     next.urlKey = next.url;
-    const nodes = await loadLocalNodes(config);
-    const duplicate = nodes.find((item) => item.nodeType === 'bookmark' && item.urlKey === next.urlKey && item.id !== node.id);
+    localNodes ??= await loadLocalNodes(config);
+    const duplicate = localNodes.find((item) => item.nodeType === 'bookmark' && item.urlKey === next.urlKey && item.id !== node.id);
     if (duplicate) throw new Error('该地址已经存在，不能创建重复收藏。');
   }
   await persistNode(config, next, 'update');

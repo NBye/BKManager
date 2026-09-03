@@ -5,11 +5,12 @@ import { configFromFields, parseConfigJson, serializeConfig, writeConfigFields }
 import { testConnection } from './es';
 import { bindProfile } from './sync';
 import { renderTree } from './tree';
-import { showBookmarkDialog, showConfirmDialog, showCreateDialog, showTextContentDialog, showTextDialog, showToast as showSharedToast } from './ui';
+import { showBookmarkDialog, showConfirmDialog, showCreateDialog, showFolderDialog, showTextContentDialog, showToast as showSharedToast } from './ui';
 import type { BookmarkNode, ConnectionConfig } from './types';
 import { copyNode } from './node-service';
 
 const tree = document.querySelector<HTMLElement>('#tree')!;
+const treeScroll = document.querySelector<HTMLElement>('#tree-scroll')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const popupShell = document.querySelector<HTMLElement>('.popup-shell')!;
 const configPanel = document.querySelector<HTMLElement>('#config-panel')!;
@@ -93,7 +94,7 @@ function setInlineConfigMode(mode: 'form' | 'json'): void {
 function setConfiguredView(configured: boolean, config: ConnectionConfig | null = null): void {
   popupShell.classList.toggle('config-mode', !configured);
   configPanel.classList.toggle('hidden', configured);
-  tree.classList.toggle('hidden', !configured);
+  treeScroll.classList.toggle('hidden', !configured);
   if (!configured) {
     searchBar.classList.add('hidden');
     for (const id of ['add-current', 'add-folder', 'search-toggle', 'layout-toggle']) document.querySelector<HTMLElement>(`#${id}`)?.classList.add('hidden');
@@ -115,9 +116,9 @@ function closeContextMenu(): void {
 async function editNode(node: BookmarkNode): Promise<void> {
   const config = activeConfig;
   if (node.nodeType === 'folder') {
-    const name = await showTextDialog('编辑目录', '目录名称', node.name ?? '未命名');
-    if (name) {
-      const updated = await updateNode(config, node, { name });
+    const result = await showFolderDialog('编辑目录', currentNodes, { name: node.name ?? '未命名', folderId: node.parentId }, node.id);
+    if (result) {
+      const updated = await updateNode(config, node, { name: result.name, parentId: result.folderId });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   } else if (node.nodeType === 'bookmark') {
@@ -128,27 +129,27 @@ async function editNode(node: BookmarkNode): Promise<void> {
       folderId: node.parentId
     });
     if (result) {
-      const updated = await updateNode(config, node, { title: result.title, url: result.url, iconUrl: result.iconUrl });
+      const updated = await updateNode(config, node, { title: result.title, url: result.url, iconUrl: result.iconUrl, parentId: result.folderId });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   } else {
-    const result = await showTextContentDialog('编辑文案', { title: node.title ?? '', content: node.content ?? '' });
+    const result = await showTextContentDialog('编辑文案', currentNodes, { title: node.title ?? '', content: node.content ?? '', folderId: node.parentId });
     if (result !== null) {
-      const updated = await updateNode(config, node, { title: result.title, content: result.content });
+      const updated = await updateNode(config, node, { title: result.title, content: result.content, parentId: result.folderId });
       currentNodes = currentNodes.map((item) => item.id === updated.id ? updated : item);
     }
   }
   renderCurrentTree();
 }
 
-async function createNodeInFolder(folder: BookmarkNode): Promise<void> {
-  const result = await showCreateDialog(currentNodes, folder.id);
+async function createNodeInFolder(folderId: string | null): Promise<void> {
+  const result = await showCreateDialog(currentNodes, folderId);
   if (!result) return;
   if (result.nodeType === 'folder') {
-    const created = await createFolder(activeConfig, folder.id, result.name);
+    const created = await createFolder(activeConfig, result.folderId, result.name);
     currentNodes = [...currentNodes, created];
   } else if (result.nodeType === 'text') {
-    const created = await createText(activeConfig, folder.id, result.content, result.title);
+    const created = await createText(activeConfig, result.folderId, result.content, result.title);
     currentNodes = [...currentNodes, created];
   } else {
     try {
@@ -164,6 +165,28 @@ async function createNodeInFolder(folder: BookmarkNode): Promise<void> {
     }
   }
   renderCurrentTree();
+}
+
+function showTreeContextMenu(event: MouseEvent): void {
+  if (event.target instanceof Element && event.target.closest('.tree-row, .flat-item-card')) return;
+  event.preventDefault();
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'node-context-menu';
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新建</span>';
+  create.addEventListener('click', () => {
+    closeContextMenu();
+    void createNodeInFolder(currentFolderId()).catch((error) => showStatus(error instanceof Error ? error.message : '新建失败', true));
+  });
+  menu.append(create);
+  document.body.append(menu);
+  const menuWidth = 92;
+  menu.style.left = `${Math.min(event.clientX, Math.max(4, window.innerWidth - menuWidth))}px`;
+  menu.style.top = `${Math.min(event.clientY, Math.max(4, window.innerHeight - 42))}px`;
+  activeContextMenu = menu;
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
 async function copyTextNode(node: BookmarkNode): Promise<void> {
@@ -194,7 +217,7 @@ function showNodeContextMenu(node: BookmarkNode, event: MouseEvent): void {
   edit.addEventListener('click', () => { closeContextMenu(); void editNode(node).catch((error) => showStatus(error instanceof Error ? error.message : '编辑失败', true)); });
   if (node.nodeType === 'folder') {
     const create = createAction('新建', 'M12 5v14M5 12h14');
-    create.addEventListener('click', () => { closeContextMenu(); void createNodeInFolder(node).catch((error) => showStatus(error instanceof Error ? error.message : '新建失败', true)); });
+    create.addEventListener('click', () => { closeContextMenu(); void createNodeInFolder(node.id).catch((error) => showStatus(error instanceof Error ? error.message : '新建失败', true)); });
     menu.append(create);
   }
   const moveUp = createAction('上移', 'M12 19V5m0 0-5 5m5-5 5 5');
@@ -485,6 +508,7 @@ layoutToggle.addEventListener('click', () => {
   renderCurrentTree();
 });
 searchInput.addEventListener('input', () => renderCurrentTree());
+treeScroll.addEventListener('contextmenu', showTreeContextMenu);
 
 document.querySelector<HTMLButtonElement>('#inline-config-test')!.addEventListener('click', async () => {
   try { await testConnection(readInlineConfig()); showStatus('ES 连接成功'); }

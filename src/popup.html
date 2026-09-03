@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN">
   <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>ES Bookmark Manager</title></head>
-  <body>
+  <body class="popup-body">
     <main class="popup-shell">
       <header class="popup-header">
         <h1>收藏夹</h1>
@@ -34,7 +34,7 @@
           </div>
         </form>
       </section>
-      <div id="tree" class="tree popup-tree"></div>
+      <div id="tree-scroll" class="popup-tree-scroll"><div id="tree" class="tree popup-tree"></div></div>
       <div id="modal-root"></div>
     </main>
     <script type="module" src="./popup.ts"></script>
